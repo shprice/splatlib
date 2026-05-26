@@ -614,7 +614,8 @@ def _compute_duct(req: DuctRequest) -> DuctResponse:
     data_clamp = np.clip(data, p2, p98)
 
     # ---- Matplotlib figure (dark theme to match UI) -------------------------
-    fig, ax = plt.subplots(figsize=(10, 4), facecolor="#0c101e")
+    # Larger figure + higher DPI so text stays crisp when displayed at panel width
+    fig, ax = plt.subplots(figsize=(14, 5), facecolor="#0c101e")
     ax.set_facecolor("#0c101e")
 
     # RdYlGn_r: green=low loss (ducting), red=high loss (blocked)
@@ -657,7 +658,7 @@ def _compute_duct(req: DuctRequest) -> DuctResponse:
     plt.tight_layout()
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120, facecolor="#0c101e")
+    fig.savefig(buf, format="png", dpi=150, facecolor="#0c101e")
     plt.close(fig)
 
     image_b64 = base64.b64encode(buf.getvalue()).decode()

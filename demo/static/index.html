@@ -189,19 +189,54 @@
   #ductPanel {
     position: absolute;
     top: 14px; right: 14px;
-    width: 680px;
+    /* Fill most of the screen right of the controls panel, up to a max */
+    width: min(960px, calc(100vw - 312px));
+    min-width: 400px;
+    max-height: calc(100vh - 28px);
     display: none;
     flex-direction: column;
     gap: 10px;
+    /* User-resizable in both axes */
+    resize: both;
+    overflow: auto;
   }
   #ductImage {
     width: 100%;
     border-radius: 6px;
     display: block;
+    cursor: zoom-in;
+    transition: opacity 0.1s;
   }
+  #ductImage:hover { opacity: 0.92; }
+
+  /* Lightbox — click image to view at full native resolution */
+  #ductLightbox {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.88);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+  }
+  #ductLightbox.open { display: flex; }
+  #ductLightbox img {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 8px 60px rgba(0,0,0,0.8);
+  }
+  #ductLightboxClose {
+    position: fixed; top: 18px; right: 22px;
+    font-size: 28px; color: #fff; cursor: pointer; z-index: 10000;
+    line-height: 1; opacity: 0.7;
+  }
+  #ductLightboxClose:hover { opacity: 1; }
+
   .duct-stats-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: repeat(6, 1fr);
     gap: 6px;
   }
   .duct-stat-chip {
@@ -416,12 +451,21 @@
 
 <!-- ===== Duct result panel ===== -->
 <div class="panel" id="ductPanel">
-  <div class="stats-title" id="ductPanelTitle">Evaporation duct propagation</div>
-  <img id="ductImage" src="" alt="Duct path-loss heatmap">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+    <div class="stats-title" style="margin-bottom:0">Evaporation duct propagation</div>
+    <span style="font-size:10px;color:var(--text-dim);cursor:pointer;" onclick="openDuctLightbox()" title="View full size">⤢ Full size</span>
+  </div>
+  <img id="ductImage" src="" alt="Duct path-loss heatmap" onclick="openDuctLightbox()">
   <div class="duct-stats-grid" id="ductStats"></div>
   <div style="font-size:10px;color:var(--text-dim);margin-top:2px">
-    Green = low path loss (ducting channel) · Red = high path loss · Dashed white = TX height · Dotted orange = duct ceiling
+    Green = low path loss (ducting channel) · Red = high path loss · Dashed white = TX height · Dotted orange = duct ceiling · Click image to enlarge
   </div>
+</div>
+
+<!-- ===== Duct lightbox ===== -->
+<div id="ductLightbox" onclick="closeDuctLightbox()">
+  <span id="ductLightboxClose" onclick="closeDuctLightbox()">✕</span>
+  <img id="ductLightboxImg" src="" alt="Duct path-loss (full size)">
 </div>
 
 <!-- ===== Legend ===== -->
@@ -949,9 +993,22 @@ async function computeDuct() {
   }
 }
 
+function openDuctLightbox() {
+  const src = document.getElementById('ductImage').src;
+  if (!src || src === window.location.href) return;
+  document.getElementById('ductLightboxImg').src = src;
+  document.getElementById('ductLightbox').classList.add('open');
+}
+function closeDuctLightbox() {
+  document.getElementById('ductLightbox').classList.remove('open');
+}
+// Close lightbox with Escape key
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDuctLightbox(); });
+
 function showDuctResult(data) {
   const panel = document.getElementById('ductPanel');
-  document.getElementById('ductImage').src = `data:image/png;base64,${data.image_b64}`;
+  const imgSrc = `data:image/png;base64,${data.image_b64}`;
+  document.getElementById('ductImage').src = imgSrc;
   panel.style.display = 'flex';
 
   const s = data.stats;
