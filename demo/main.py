@@ -112,6 +112,41 @@ class EmitterConfig(BaseModel):
     freq_mhz: float = 450.0
 
 
+class PropagationConfig(BaseModel):
+    """
+    Propagation environment parameters forwarded to the ITM/ITWOM model.
+    Defaults match the library's built-in values (average ground, vertical pol,
+    continental temperate climate, 50th-percentile prediction).
+    """
+    ground: int = Field(
+        0, ge=0, le=5,
+        description=(
+            "Ground/surface type: 0=average, 1=sea/salt water, 2=fresh water, "
+            "3=urban, 4=desert, 5=woodland"
+        ),
+    )
+    polarz: int = Field(
+        0, ge=0, le=1,
+        description="Polarisation: 0=vertical, 1=horizontal",
+    )
+    radio_climate: int = Field(
+        5, ge=1, le=7,
+        description=(
+            "ITM climate zone: 1=equatorial, 2=continental subtropical, "
+            "3=maritime subtropical, 4=desert, 5=continental temperate (default), "
+            "6=maritime temperate inland, 7=maritime temperate oceanic"
+        ),
+    )
+    conf: float = Field(
+        0.50, ge=0.01, le=0.99,
+        description="Confidence level (0.50 = median prediction).",
+    )
+    rel: float = Field(
+        0.50, ge=0.01, le=0.99,
+        description="Time reliability (0.50 = 50% of time signal exceeds this level).",
+    )
+
+
 class GridConfig(BaseModel):
     center_lat: float | None = None
     center_lon: float | None = None
@@ -125,11 +160,13 @@ class CoverageRequest(BaseModel):
     rx_sensitivity_dbm: float = -100.0
     dynamic_range_db: float = 60.0
     use_terrain: bool = Field(True, description="Use native ITM/ITWOM + SRTM terrain if available.")
+    propagation: PropagationConfig = PropagationConfig()
 
 
 class JammingRequest(BaseModel):
     jammer_txs: list[EmitterConfig] = Field(..., min_length=1, description="One or more jamming transmitters.")
     rx_height_m: float = Field(1.0, ge=0.1, le=200.0, description="Receiver antenna height above ground (m).")
+    rx_gain_dbi: float = Field(0.0, ge=0.0, le=20.0, description="Receiver antenna gain (dBi).")
     jam_threshold_dbm: float = Field(
         -100.0,
         description=(
@@ -139,6 +176,7 @@ class JammingRequest(BaseModel):
     )
     grid: GridConfig = GridConfig()
     use_terrain: bool = Field(True, description="Use native ITM/ITWOM + SRTM terrain if available.")
+    propagation: PropagationConfig = PropagationConfig()
 
 
 class Bounds(BaseModel):
@@ -212,11 +250,25 @@ def _received_power_fspl(emitter: EmitterConfig, lat_grid: np.ndarray, lon_grid:
 # Native ITM/ITWOM + SRTM computation (runs in thread pool)
 # ---------------------------------------------------------------------------
 
+def _make_splat_prop(cfg: PropagationConfig | None):
+    """Convert a PropagationConfig Pydantic model to a SplatPropagation ctypes struct."""
+    if cfg is None or _splat is None:
+        return None
+    return _splat_mod.make_propagation(
+        ground=cfg.ground,
+        polarz=cfg.polarz,
+        radio_climate=cfg.radio_climate,
+        conf=cfg.conf,
+        rel=cfg.rel,
+    )
+
+
 def _native_coverage_grid(
     emitter: EmitterConfig,
     lat_grid: np.ndarray,
     lon_grid: np.ndarray,
     task_id: str | None = None,
+    prop=None,
 ) -> tuple[np.ndarray, str]:
     """
     Compute received-power grid using ITWOM + SRTM terrain.
@@ -241,6 +293,7 @@ def _native_coverage_grid(
         emitter, lat_grid, lon_grid, terrain,
         rx_height_m=2.0,
         task_id=task_id, progress_base=5.0, progress_span=90.0,
+        prop=prop,
     )
     return power, "ITM/ITWOM + SRTM terrain"
 
@@ -251,9 +304,11 @@ def _itm_power_grid(
     lon_grid: np.ndarray,
     terrain,
     rx_height_m: float = 2.0,
+    rx_gain_dbi: float = 0.0,
     task_id: str | None = None,
     progress_base: float = 0.0,
     progress_span: float = 100.0,
+    prop=None,
 ) -> np.ndarray:
     """
     Helper: compute received-power grid (dBm) for a single TX using ITWOM + SRTM.
@@ -297,6 +352,8 @@ def _itm_power_grid(
                         float(lat_grid[i, j]), float(lon_grid[i, j]),
                         profiles[i, j], spc, em.freq_mhz,
                         rx_height_m=rx_height_m,
+                        rx_gain_dbi=rx_gain_dbi,
+                        prop=prop,
                     )
                     power[i, j] = res.received_power_dbm
                 except Exception:
@@ -312,7 +369,9 @@ def _native_jam_grid(
     lat_grid: np.ndarray,
     lon_grid: np.ndarray,
     rx_height_m: float,
+    rx_gain_dbi: float = 0.0,
     task_id: str | None = None,
+    prop=None,
 ) -> tuple[np.ndarray, str]:
     """
     Compute incoherent combined jammer power (dBm) at every grid cell using
@@ -341,15 +400,24 @@ def _native_jam_grid(
     for idx, em in enumerate(jammer_ems):
         p = _itm_power_grid(
             em, lat_grid, lon_grid, terrain, rx_height_m,
+            rx_gain_dbi=rx_gain_dbi,
             task_id=task_id,
             progress_base=5.0 + idx * span_each,
             progress_span=span_each,
+            prop=prop,
         )
         jam_mw += np.power(10.0, p / 10.0)
     with np.errstate(divide='ignore'):
         combined = 10.0 * np.log10(np.maximum(jam_mw, 1e-30))
-    label = (f"ITM/ITWOM + SRTM  "
-             f"({n} jammer{'s' if n > 1 else ''}, RX {rx_height_m:.1f} m)")
+    pol_str     = "H-pol" if (prop and prop.polarz == 1) else "V-pol"
+    ground_names = ["avg gnd", "sea", "fresh water", "urban", "desert", "woodland"]
+    gnd_str     = ground_names[prop.ground] if prop and 0 <= prop.ground < len(ground_names) else "avg gnd"
+    conf_pct    = int(round((prop.conf if prop else 0.5) * 100))
+    label = (
+        f"ITM/ITWOM + SRTM  "
+        f"({n} jammer{'s' if n > 1 else ''}, RX {rx_height_m:.1f} m, "
+        f"{gnd_str}, {pol_str}, {conf_pct}% conf)"
+    )
     return combined, label
 
 
@@ -441,10 +509,11 @@ async def compute_coverage(
             "Coverage: ITM/ITWOM %dx%d grid, %d terrain samples/path",
             req.grid.resolution, req.grid.resolution, _TERRAIN_SAMPLES,
         )
+        prop = _make_splat_prop(req.propagation)
         loop = asyncio.get_running_loop()
         power, model_name = await loop.run_in_executor(
             _executor,
-            lambda: _native_coverage_grid(req.emitter, lat_grid, lon_grid, task_id),
+            lambda: _native_coverage_grid(req.emitter, lat_grid, lon_grid, task_id, prop),
         )
     else:
         power = _received_power_fspl(req.emitter, lat_grid, lon_grid)
@@ -495,10 +564,15 @@ async def compute_interference(
             "Jamming: ITM/ITWOM %dx%d grid, %d jammer(s), RX %.1f m, %d terrain samples/path",
             req.grid.resolution, req.grid.resolution, n_j, req.rx_height_m, _TERRAIN_SAMPLES,
         )
+        prop = _make_splat_prop(req.propagation)
         loop = asyncio.get_running_loop()
         jammer_power, model_name = await loop.run_in_executor(
             _executor,
-            lambda: _native_jam_grid(req.jammer_txs, lat_grid, lon_grid, req.rx_height_m, task_id),
+            lambda: _native_jam_grid(
+                req.jammer_txs, lat_grid, lon_grid,
+                req.rx_height_m, req.rx_gain_dbi,
+                task_id, prop,
+            ),
         )
     else:
         jammer_power, model_name = _fspl_jam_grid(req.jammer_txs, lat_grid, lon_grid)

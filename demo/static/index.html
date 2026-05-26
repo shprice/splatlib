@@ -417,6 +417,10 @@
         <label>Antenna height (m) <span id="rxHtVal">1</span></label>
         <input type="range" id="rxHtSlider" min="0.5" max="50" step="0.5" value="1" oninput="syncSlider('rxHt')">
       </div>
+      <div class="field">
+        <label>Antenna gain (dBi) <span id="rxGainVal">0</span></label>
+        <input type="range" id="rxGainSlider" min="0" max="20" step="0.5" value="0" oninput="syncSlider('rxGain')">
+      </div>
     </div>
 
     <!-- Jammers (dynamic list) -->
@@ -437,6 +441,49 @@
     <div class="field">
       <label>Resolution <span id="resJamVal">128</span></label>
       <input type="range" id="resJamSlider" min="32" max="512" step="32" value="128" oninput="syncSlider('resJam')">
+    </div>
+
+    <!-- Propagation environment -->
+    <div class="emitter-section" style="border-color:rgba(150,120,255,0.35);">
+      <div class="emitter-label"><div class="dot" style="background:#9678ff"></div>Propagation environment</div>
+
+      <div class="field">
+        <label style="margin-bottom:4px">Ground / surface type</label>
+        <div class="basemap-grid" id="groundGrid"><!-- populated by JS --></div>
+      </div>
+
+      <div class="field" style="margin-top:6px">
+        <label>Polarisation</label>
+        <div style="display:flex;gap:12px;margin-top:3px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <input type="radio" name="jamPolarz" value="0" checked style="accent-color:var(--accent)"> Vertical (V)
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <input type="radio" name="jamPolarz" value="1" style="accent-color:var(--accent)"> Horizontal (H)
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Climate zone <span id="climateVal" style="color:var(--text);font-size:10px">Continental temperate</span></label>
+        <select id="climateSelect" style="width:100%;padding:5px 8px;border-radius:5px;border:1px solid var(--panel-border);background:var(--input-bg);color:var(--text);font-size:11px;outline:none;cursor:pointer"
+                onchange="document.getElementById('climateVal').textContent=this.options[this.selectedIndex].text">
+          <option value="1">1 — Equatorial</option>
+          <option value="2">2 — Continental subtropical</option>
+          <option value="3">3 — Maritime subtropical</option>
+          <option value="4">4 — Desert</option>
+          <option value="5" selected>5 — Continental temperate</option>
+          <option value="6">6 — Maritime temperate (inland)</option>
+          <option value="7">7 — Maritime temperate (oceanic)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Confidence <span id="confVal">50</span>%
+          <span style="font-size:9px;color:var(--text-dim);font-weight:400">— how often signal meets/exceeds this level</span>
+        </label>
+        <input type="range" id="confSlider" min="10" max="90" step="5" value="50" oninput="syncSlider('conf')">
+      </div>
     </div>
   </div>
 
@@ -585,8 +632,8 @@ const emitters = {
   jammers:  [null], // array; each slot null until placed
 };
 
-// Per-jammer ERP / height values — persisted across renderJammerList() re-renders
-let jammerParams = [{ erp: 53, ht: 10 }];
+// Per-jammer ERP / height / gain values — persisted across renderJammerList() re-renders
+let jammerParams = [{ erp: 53, ht: 10, gain: 2.15 }];
 
 let coverageLayer    = null;   // bottom layer (green safe zone, or single coverage layer)
 let coverageLayerTop = null;   // top layer    (red jammed zone — J/S mode only)
@@ -619,6 +666,31 @@ function toggleSettings() {
   _settingsOpen = !_settingsOpen;
   document.getElementById('settingsBody').style.display = _settingsOpen ? 'block' : 'none';
   document.getElementById('settingsChevron').textContent = _settingsOpen ? '▴' : '▾';
+}
+
+// ---------------------------------------------------------------------------
+// Ground type selector (jamming propagation section)
+// ---------------------------------------------------------------------------
+let currentGround = 0;  // 0=average, 1=sea, 2=fresh water, 3=urban, 4=desert, 5=woodland
+
+const GROUND_TYPES = [
+  { id: 0, label: 'Average',    icon: '🏔' },
+  { id: 1, label: 'Sea',        icon: '🌊' },
+  { id: 2, label: 'Fresh water',icon: '💧' },
+  { id: 3, label: 'Urban',      icon: '🏙' },
+  { id: 4, label: 'Desert',     icon: '🏜' },
+  { id: 5, label: 'Woodland',   icon: '🌲' },
+];
+
+function renderGroundButtons() {
+  const grid = document.getElementById('groundGrid');
+  if (!grid) return;
+  grid.innerHTML = GROUND_TYPES.map(g => `
+    <button class="basemap-btn${currentGround === g.id ? ' active' : ''}"
+            onclick="currentGround=${g.id}; renderGroundButtons()" title="${g.label}">
+      <span class="bm-icon">${g.icon}</span>
+      <span>${g.label}</span>
+    </button>`).join('');
 }
 
 function renderBasemapButtons() {
@@ -817,6 +889,7 @@ if (_savedGoogleKey) document.getElementById('googleKeyInput').value = _savedGoo
 initCesium(_savedToken);
 renderJammerList();     // populate the initial single jammer card
 renderBasemapButtons(); // populate basemap grid with correct active/disabled states
+renderGroundButtons();  // populate ground type grid
 
 // Query backend capabilities and update terrain-toggle indicator
 (async function checkCapabilities() {
@@ -911,6 +984,9 @@ const sliderMap = {
   jamThresh:{ slider: 'jamThreshSlider',label: 'jamThreshVal',fmt: v => v },
   radJam:   { slider: 'radJamSlider',   label: 'radJamVal',   fmt: v => v },
   resJam:   { slider: 'resJamSlider',   label: 'resJamVal',   fmt: v => v },
+  // Jamming — propagation extras
+  rxGain:   { slider: 'rxGainSlider',   label: 'rxGainVal',   fmt: v => v },
+  conf:     { slider: 'confSlider',     label: 'confVal',     fmt: v => v },
   // Duct sliders
   ductFreq:  { slider: 'ductFreqSlider',  label: 'ductFreqVal',  fmt: v => v },
   ductTxHt:  { slider: 'ductTxHtSlider',  label: 'ductTxHtVal',  fmt: v => v },
@@ -962,6 +1038,12 @@ function renderJammerList() {
                  oninput="jammerParams[${idx}].ht = Math.min(Math.max(+this.value||1, 1), 500)"
                  onchange="jammerParams[${idx}].ht = Math.min(Math.max(+this.value||1, 1), 500); this.value = jammerParams[${idx}].ht">
         </div>
+        <div class="field">
+          <label>Gain (dBi) <span style="color:var(--text-dim);font-weight:400">0–20</span></label>
+          <input type="number" id="jamGain_${idx}" value="${p.gain}" min="0" max="20" step="0.5"
+                 oninput="jammerParams[${idx}].gain = Math.min(Math.max(+this.value||0, 0), 20)"
+                 onchange="jammerParams[${idx}].gain = Math.min(Math.max(+this.value||0, 0), 20); this.value = jammerParams[${idx}].gain">
+        </div>
       </div>`;
     container.appendChild(card);
   });
@@ -973,7 +1055,7 @@ function renderJammerList() {
 function addJammer() {
   if (emitters.jammers.length >= 4) return;
   emitters.jammers.push(null);
-  jammerParams.push({ erp: 53, ht: 10 });
+  jammerParams.push({ erp: 53, ht: 10, gain: 2.15 });
   renderJammerList();
 }
 
@@ -981,7 +1063,7 @@ function removeJammer(idx) {
   if (emitters.jammers[idx]?.entity) viewer.entities.remove(emitters.jammers[idx].entity);
   emitters.jammers.splice(idx, 1);
   jammerParams.splice(idx, 1);
-  if (emitters.jammers.length === 0) { emitters.jammers.push(null); jammerParams.push({ erp: 53, ht: 10 }); }
+  if (emitters.jammers.length === 0) { emitters.jammers.push(null); jammerParams.push({ erp: 53, ht: 10, gain: 2.15 }); }
   renderJammerList();
   updateComputeBtn();
 }
@@ -1153,20 +1235,34 @@ async function compute() {
 
       // Build jammer TX list (only placed jammers)
       const jammer_txs = emitters.jammers
-        .map((j, i) => j ? { lat: j.lat, lon: j.lon, freq_mhz: freq, gain_dbi: 2.15,
-          erp_dbm: jammerParams[i]?.erp ?? 53,
-          antenna_height_m: jammerParams[i]?.ht ?? 10 } : null)
+        .map((j, i) => j ? {
+          lat: j.lat, lon: j.lon, freq_mhz: freq,
+          erp_dbm:          jammerParams[i]?.erp  ?? 53,
+          antenna_height_m: jammerParams[i]?.ht   ?? 10,
+          gain_dbi:         jammerParams[i]?.gain ?? 2.15,
+        } : null)
         .filter(j => j !== null);
+
+      const polarz = +(document.querySelector('input[name="jamPolarz"]:checked')?.value ?? 0);
+      const conf   = +document.getElementById('confSlider').value / 100;
 
       body = {
         jammer_txs,
-        rx_height_m:      +document.getElementById('rxHtSlider').value,
-        jam_threshold_dbm:+document.getElementById('jamThreshSlider').value,
+        rx_height_m:       +document.getElementById('rxHtSlider').value,
+        rx_gain_dbi:       +document.getElementById('rxGainSlider').value,
+        jam_threshold_dbm: +document.getElementById('jamThreshSlider').value,
         grid: {
           radius_m:   +document.getElementById('radJamSlider').value * 1000,
           resolution: +document.getElementById('resJamSlider').value,
         },
         use_terrain: useTerrain,
+        propagation: {
+          ground:        currentGround,
+          polarz,
+          radio_climate: +document.getElementById('climateSelect').value,
+          conf,
+          rel:           conf,   // tie reliability to confidence for simplicity
+        },
       };
     }
 
@@ -1371,7 +1467,7 @@ function clearAll() {
   // Remove all jammer entities and reset to single empty slot
   emitters.jammers.forEach(j => { if (j?.entity) viewer.entities.remove(j.entity); });
   emitters.jammers = [null];
-  jammerParams = [{ erp: 53, ht: 10 }];
+  jammerParams = [{ erp: 53, ht: 10, gain: 2.15 }];
 
   if (coverageLayerTop) { viewer.imageryLayers.remove(coverageLayerTop, true); coverageLayerTop = null; }
   if (coverageLayer)    { viewer.imageryLayers.remove(coverageLayer,    true); coverageLayer    = null; }

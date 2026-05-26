@@ -87,12 +87,49 @@ class SplatInterferenceResult(ctypes.Structure):
     ]
 
 
-# Propagation model constants (mirror splat_model_t enum)
+class SplatPropagation(ctypes.Structure):
+    """
+    Mirrors splat_propagation_t.
+    Propagation environment parameters — ground type, polarisation, climate,
+    confidence and reliability percentiles.
+    Pass ctypes.byref(SplatPropagation(...)) or None (→ NULL) for library defaults.
+    """
+    _fields_ = [
+        ("ground",        ctypes.c_int),     # splat_ground_t enum
+        ("polarz",        ctypes.c_int),     # 0=vertical, 1=horizontal
+        ("radio_climate", ctypes.c_int),     # 1–7
+        ("conf",          ctypes.c_double),  # confidence  0.01–0.99
+        ("rel",           ctypes.c_double),  # reliability 0.01–0.99
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Propagation model
 SPLAT_MODEL_ITM   = 0
 SPLAT_MODEL_ITWOM = 1
 
+# Ground type (splat_ground_t)
+SPLAT_GROUND_AVERAGE     = 0
+SPLAT_GROUND_SEA         = 1
+SPLAT_GROUND_FRESH_WATER = 2
+SPLAT_GROUND_URBAN       = 3
+SPLAT_GROUND_DESERT      = 4
+SPLAT_GROUND_WOODLAND    = 5
+
+# Radio climate zones
+SPLAT_CLIMATE_EQUATORIAL              = 1
+SPLAT_CLIMATE_CONTINENTAL_SUBTROPICAL = 2
+SPLAT_CLIMATE_MARITIME_SUBTROPICAL    = 3
+SPLAT_CLIMATE_DESERT                  = 4
+SPLAT_CLIMATE_CONTINENTAL_TEMPERATE   = 5   # default
+SPLAT_CLIMATE_MARITIME_TEMPERATE_INL  = 6
+SPLAT_CLIMATE_MARITIME_TEMPERATE_OCE  = 7
+
 # Error codes
-SPLAT_OK         =  0
+SPLAT_OK          =  0
 SPLAT_ERR_INVALID = -1
 SPLAT_ERR_TERRAIN = -2
 
@@ -111,12 +148,13 @@ _lib.splat_error_string.argtypes = [ctypes.c_int]
 
 _lib.splat_point_to_point.restype  = ctypes.c_int
 _lib.splat_point_to_point.argtypes = [
-    ctypes.POINTER(SplatSite),        # tx
-    ctypes.POINTER(SplatSite),        # rx
-    ctypes.POINTER(SplatProfile),     # terrain
-    ctypes.c_double,                  # freq_mhz
-    ctypes.c_int,                     # model
-    ctypes.POINTER(SplatPathResult),  # result (out)
+    ctypes.POINTER(SplatSite),           # tx
+    ctypes.POINTER(SplatSite),           # rx
+    ctypes.POINTER(SplatProfile),        # terrain
+    ctypes.c_double,                     # freq_mhz
+    ctypes.c_int,                        # model
+    ctypes.POINTER(SplatPropagation),    # prop (NULL = defaults)
+    ctypes.POINTER(SplatPathResult),     # result (out)
 ]
 
 _lib.splat_interference_point.restype  = ctypes.c_int
@@ -129,6 +167,7 @@ _lib.splat_interference_point.argtypes = [
     ctypes.c_double,                        # freq_mhz
     ctypes.c_double,                        # js_threshold_db
     ctypes.c_int,                           # model
+    ctypes.POINTER(SplatPropagation),       # prop (NULL = defaults)
     ctypes.POINTER(SplatInterferenceResult),# result (out)
 ]
 
@@ -165,6 +204,23 @@ def make_site(lat: float, lon: float,
                      gain_dbi=gain_dbi)
 
 
+def make_propagation(
+    ground: int = SPLAT_GROUND_AVERAGE,
+    polarz: int = 0,
+    radio_climate: int = SPLAT_CLIMATE_CONTINENTAL_TEMPERATE,
+    conf: float = 0.50,
+    rel: float = 0.50,
+) -> SplatPropagation:
+    """Build a SplatPropagation struct.  Pass ctypes.byref(result) to point_to_point."""
+    return SplatPropagation(
+        ground=ground,
+        polarz=polarz,
+        radio_climate=radio_climate,
+        conf=conf,
+        rel=rel,
+    )
+
+
 def point_to_point(
     tx: SplatSite,
     rx_lat: float, rx_lon: float,
@@ -172,27 +228,36 @@ def point_to_point(
     spacing_m: float,
     freq_mhz: float,
     rx_height_m: float = 2.0,
+    rx_gain_dbi: float = 0.0,
     model: int = SPLAT_MODEL_ITWOM,
+    prop: "SplatPropagation | None" = None,
 ) -> SplatPathResult:
     """
     Run a single point-to-point propagation analysis.
-    heights_m: numpy float64 array of terrain elevations along the TX→RX path.
-    spacing_m: distance between consecutive samples in metres.
-    rx_height_m: receiver antenna height above ground (m). Default 2 m.
+
+    heights_m:   numpy float64 array of terrain elevations along the TX→RX path.
+    spacing_m:   distance between consecutive samples in metres.
+    rx_height_m: receiver antenna height above ground (m).
+    rx_gain_dbi: receiver antenna gain (dBi); added to received_power_dbm by the DLL.
+    prop:        SplatPropagation instance (ground type, polarisation, climate,
+                 confidence, reliability).  None → library defaults.
     """
     ensure_init()
     import numpy as np
     h = np.ascontiguousarray(heights_m, dtype=np.float64)
-    rx = SplatSite(lat=rx_lat, lon=rx_lon, antenna_height_m=rx_height_m)
+    rx = SplatSite(lat=rx_lat, lon=rx_lon,
+                   antenna_height_m=rx_height_m,
+                   gain_dbi=rx_gain_dbi)
     profile = SplatProfile(
         heights_m=h.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         count=len(h),
         spacing_m=spacing_m,
     )
     result = SplatPathResult()
+    prop_ptr = ctypes.byref(prop) if prop is not None else None
     rc = _lib.splat_point_to_point(
         ctypes.byref(tx), ctypes.byref(rx), ctypes.byref(profile),
-        freq_mhz, model, ctypes.byref(result),
+        freq_mhz, model, prop_ptr, ctypes.byref(result),
     )
     if rc != SPLAT_OK:
         raise RuntimeError(f"splat_point_to_point failed: {rc}")
@@ -208,6 +273,7 @@ def interference_point(
     freq_mhz: float,
     js_threshold_db: float = 6.0,
     model: int = SPLAT_MODEL_ITWOM,
+    prop: "SplatPropagation | None" = None,
 ) -> SplatInterferenceResult:
     ensure_init()
     import numpy as np
@@ -223,10 +289,11 @@ def interference_point(
         count=len(jh), spacing_m=jammer_spacing_m,
     )
     result = SplatInterferenceResult()
+    prop_ptr = ctypes.byref(prop) if prop is not None else None
     rc = _lib.splat_interference_point(
         ctypes.byref(signal_tx), ctypes.byref(jammer_tx), ctypes.byref(rx),
         ctypes.byref(sig_profile), ctypes.byref(jam_profile),
-        freq_mhz, js_threshold_db, model,
+        freq_mhz, js_threshold_db, model, prop_ptr,
         ctypes.byref(result),
     )
     if rc != SPLAT_OK:

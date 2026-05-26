@@ -35,6 +35,40 @@ typedef enum splat_model
 } splat_model_t;
 
 /* -------------------------------------------------------------------------
+ * Ground / terrain type
+ * ---------------------------------------------------------------------- */
+typedef enum splat_ground
+{
+    SPLAT_GROUND_AVERAGE    = 0,  /* Average ground:       eps=15,  sigma=0.005  */
+    SPLAT_GROUND_SEA        = 1,  /* Salt water / sea:     eps=80,  sigma=5.0    */
+    SPLAT_GROUND_FRESH_WATER= 2,  /* Fresh water / lakes:  eps=80,  sigma=0.01   */
+    SPLAT_GROUND_URBAN      = 3,  /* Urban / industrial:   eps=5,   sigma=0.001  */
+    SPLAT_GROUND_DESERT     = 4,  /* Desert / poor ground: eps=3,   sigma=0.001  */
+    SPLAT_GROUND_WOODLAND   = 5,  /* Woodland / wet ground:eps=12,  sigma=0.01   */
+} splat_ground_t;
+
+/* -------------------------------------------------------------------------
+ * Propagation environment parameters
+ *
+ * Pass NULL to any function that accepts this struct to use library defaults
+ * (average ground, vertical polarisation, continental temperate climate,
+ *  50% confidence / 50% reliability).
+ * ---------------------------------------------------------------------- */
+typedef struct splat_propagation
+{
+    splat_ground_t ground;        /* ground / surface type                         */
+    int            polarz;        /* 0 = vertical polarisation, 1 = horizontal      */
+    int            radio_climate; /* ITM climate zone 1–7 (5 = continental temperate)
+                                     1=equatorial  2=continental subtropical
+                                     3=maritime subtropical  4=desert
+                                     5=continental temperate (default)
+                                     6=maritime temperate inland
+                                     7=maritime temperate oceanic                   */
+    double         conf;          /* confidence level  0.01–0.99 (0.50 = median)    */
+    double         rel;           /* time reliability  0.01–0.99 (0.50 = median)    */
+} splat_propagation_t;
+
+/* -------------------------------------------------------------------------
  * Core types
  * ---------------------------------------------------------------------- */
 
@@ -104,14 +138,16 @@ SPLATLIB_API const char* splat_error_string(int error_code);
 /*
  * Point-to-point propagation analysis.
  * terrain: pre-sampled elevation profile along the TX→RX great-circle path.
+ * prop:    propagation environment parameters; pass NULL for library defaults.
  */
 SPLATLIB_API int splat_point_to_point(
-    const splat_site_t*    tx,
-    const splat_site_t*    rx,
-    const splat_profile_t* terrain,
-    double                 freq_mhz,
-    splat_model_t          model,
-    splat_path_result_t*   result
+    const splat_site_t*          tx,
+    const splat_site_t*          rx,
+    const splat_profile_t*       terrain,
+    double                       freq_mhz,
+    splat_model_t                model,
+    const splat_propagation_t*   prop,     /* NULL = defaults */
+    splat_path_result_t*         result
 );
 
 /*
@@ -119,6 +155,7 @@ SPLATLIB_API int splat_point_to_point(
  * signal_terrain: elevation profile along signal_tx → rx.
  * jammer_terrain: elevation profile along jammer_tx → rx.
  * js_threshold_db: J/S ratio (dB) at which the link is considered jammed.
+ * prop:           propagation environment parameters; pass NULL for defaults.
  */
 SPLATLIB_API int splat_interference_point(
     const splat_site_t*          signal_tx,
@@ -129,6 +166,7 @@ SPLATLIB_API int splat_interference_point(
     double                       freq_mhz,
     double                       js_threshold_db,
     splat_model_t                model,
+    const splat_propagation_t*   prop,     /* NULL = defaults */
     splat_interference_result_t* result
 );
 

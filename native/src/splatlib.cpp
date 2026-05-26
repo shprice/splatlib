@@ -30,14 +30,47 @@ static elev_t* build_itm_elev(const splat_profile_t* p)
     return elev;
 }
 
-/* Typical default atmospheric / ground parameters for terrestrial RF. */
-static constexpr double EPS_DIELECT       = 15.0;   /* earth dielectric constant */
-static constexpr double SGM_CONDUCTIVITY  = 0.005;  /* earth conductivity, S/m   */
-static constexpr double ENO_NS_SURFREF    = 301.0;  /* surface refractivity, N-units */
-static constexpr int    RADIO_CLIMATE     = 5;      /* 5 = continental temperate */
-static constexpr int    POL_VERTICAL      = 1;
-static constexpr double CONF_MEDIAN       = 0.50;
-static constexpr double REL_MEDIAN        = 0.50;
+/* Library-default propagation environment. */
+static constexpr double ENO_NS_SURFREF    = 301.0;  /* surface refractivity, N-units (fixed) */
+static constexpr double CONF_DEFAULT      = 0.50;
+static constexpr double REL_DEFAULT       = 0.50;
+static constexpr int    CLIMATE_DEFAULT   = 5;      /* continental temperate */
+static constexpr int    POL_DEFAULT       = 0;      /* 0 = vertical (ITM convention) */
+
+/* Ground type table: { eps_dielect, sgm_conductivity }                   */
+struct ground_params { double eps; double sigma; };
+static constexpr ground_params GROUND_TABLE[] = {
+    { 15.0,  0.005  },  /* 0 = SPLAT_GROUND_AVERAGE      */
+    { 80.0,  5.0    },  /* 1 = SPLAT_GROUND_SEA          */
+    { 80.0,  0.01   },  /* 2 = SPLAT_GROUND_FRESH_WATER  */
+    {  5.0,  0.001  },  /* 3 = SPLAT_GROUND_URBAN        */
+    {  3.0,  0.001  },  /* 4 = SPLAT_GROUND_DESERT       */
+    { 12.0,  0.01   },  /* 5 = SPLAT_GROUND_WOODLAND     */
+};
+static constexpr int GROUND_TABLE_SIZE =
+    static_cast<int>(sizeof(GROUND_TABLE) / sizeof(GROUND_TABLE[0]));
+
+/* Resolve a (possibly-NULL) splat_propagation_t pointer to concrete values. */
+static void resolve_prop(const splat_propagation_t* p,
+                         double& eps, double& sigma,
+                         int& climate, int& polarz,
+                         double& conf, double& rel)
+{
+    if (!p) {
+        eps = GROUND_TABLE[0].eps;  sigma  = GROUND_TABLE[0].sigma;
+        climate = CLIMATE_DEFAULT;  polarz = POL_DEFAULT;
+        conf    = CONF_DEFAULT;     rel    = REL_DEFAULT;
+        return;
+    }
+    int gi = static_cast<int>(p->ground);
+    if (gi < 0 || gi >= GROUND_TABLE_SIZE) gi = 0;
+    eps     = GROUND_TABLE[gi].eps;
+    sigma   = GROUND_TABLE[gi].sigma;
+    climate = (p->radio_climate >= 1 && p->radio_climate <= 7) ? p->radio_climate : CLIMATE_DEFAULT;
+    polarz  = (p->polarz == 1) ? 1 : 0;
+    conf    = (p->conf > 0.0 && p->conf < 1.0) ? p->conf : CONF_DEFAULT;
+    rel     = (p->rel  > 0.0 && p->rel  < 1.0) ? p->rel  : REL_DEFAULT;
+}
 
 static const char* const ERROR_STRINGS[] = {
     "OK",
@@ -88,18 +121,23 @@ const char* splat_error_string(int code)
  * ---------------------------------------------------------------------- */
 
 int splat_point_to_point(
-    const splat_site_t*    tx,
-    const splat_site_t*    rx,
-    const splat_profile_t* terrain,
-    double                 freq_mhz,
-    splat_model_t          model,
-    splat_path_result_t*   result)
+    const splat_site_t*          tx,
+    const splat_site_t*          rx,
+    const splat_profile_t*       terrain,
+    double                       freq_mhz,
+    splat_model_t                model,
+    const splat_propagation_t*   prop,
+    splat_path_result_t*         result)
 {
     if (!tx || !rx || !terrain || !result)          return SPLAT_ERR_INVALID;
     if (!g_initialized)                             return SPLAT_ERR_INVALID;
     if (terrain->count < 2 || !terrain->heights_m) return SPLAT_ERR_TERRAIN;
     if (model != SPLAT_MODEL_ITM && model != SPLAT_MODEL_ITWOM)
         return SPLAT_ERR_MODEL;
+
+    double eps, sigma, conf, rel;
+    int    climate, polarz;
+    resolve_prop(prop, eps, sigma, climate, polarz, conf, rel);
 
     elev_t* elev = build_itm_elev(terrain);
     if (!elev) return SPLAT_ERR_INVALID;
@@ -113,9 +151,9 @@ int splat_point_to_point(
         /* ITWOM v3.0 — better diffraction modelling, preferred above ~100 MHz */
         point_to_point(elev,
             tx->antenna_height_m, rx->antenna_height_m,
-            EPS_DIELECT, SGM_CONDUCTIVITY, ENO_NS_SURFREF,
-            freq_mhz, RADIO_CLIMATE, POL_VERTICAL,
-            CONF_MEDIAN, REL_MEDIAN,
+            eps, sigma, ENO_NS_SURFREF,
+            freq_mhz, climate, polarz,
+            conf, rel,
             path_loss, mode_str, errnum);
     }
     else
@@ -123,9 +161,9 @@ int splat_point_to_point(
         /* Legacy Longley-Rice ITM */
         point_to_point_ITM(elev,
             tx->antenna_height_m, rx->antenna_height_m,
-            EPS_DIELECT, SGM_CONDUCTIVITY, ENO_NS_SURFREF,
-            freq_mhz, RADIO_CLIMATE, POL_VERTICAL,
-            CONF_MEDIAN, REL_MEDIAN,
+            eps, sigma, ENO_NS_SURFREF,
+            freq_mhz, climate, polarz,
+            conf, rel,
             path_loss, mode_str, errnum);
     }
 
@@ -133,12 +171,12 @@ int splat_point_to_point(
 
     double dist = haversine_m(tx->lat, tx->lon, rx->lat, rx->lon);
 
-    result->path_loss_db       = path_loss;
-    result->received_power_dbm = tx->erp_dbm - path_loss + tx->gain_dbi + rx->gain_dbi;
-    result->distance_m         = dist;
-    result->elevation_angle_deg = 0.0; /* TODO: derive from terrain profile */
+    result->path_loss_db        = path_loss;
+    result->received_power_dbm  = tx->erp_dbm - path_loss + tx->gain_dbi + rx->gain_dbi;
+    result->distance_m          = dist;
+    result->elevation_angle_deg = 0.0;   /* TODO: derive from terrain profile */
     result->line_of_sight       = (errnum == 0) ? 1 : 0;
-    result->fresnel_clearance_m = 0.0; /* TODO: compute first Fresnel zone */
+    result->fresnel_clearance_m = 0.0;   /* TODO: compute first Fresnel zone */
 
     return SPLAT_OK;
 }
@@ -156,6 +194,7 @@ int splat_interference_point(
     double                       freq_mhz,
     double                       js_threshold_db,
     splat_model_t                model,
+    const splat_propagation_t*   prop,
     splat_interference_result_t* result)
 {
     if (!signal_tx || !jammer_tx || !rx || !result) return SPLAT_ERR_INVALID;
@@ -163,10 +202,10 @@ int splat_interference_point(
 
     splat_path_result_t sig_path = {}, jam_path = {};
 
-    int rc = splat_point_to_point(signal_tx, rx, signal_terrain, freq_mhz, model, &sig_path);
+    int rc = splat_point_to_point(signal_tx, rx, signal_terrain, freq_mhz, model, prop, &sig_path);
     if (rc != SPLAT_OK) return rc;
 
-    rc = splat_point_to_point(jammer_tx, rx, jammer_terrain, freq_mhz, model, &jam_path);
+    rc = splat_point_to_point(jammer_tx, rx, jammer_terrain, freq_mhz, model, prop, &jam_path);
     if (rc != SPLAT_OK) return rc;
 
     result->signal_dbm  = sig_path.received_power_dbm;
