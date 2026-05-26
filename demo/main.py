@@ -93,14 +93,6 @@ if _native_available:
         logger.warning("SRTM terrain not available (%s).", exc)
 
 
-@app.get("/api/capabilities")
-async def capabilities() -> dict:
-    return {
-        "native_propagation": _native_available,
-        "srtm_terrain": _terrain_available,
-    }
-
-
 @app.get("/api/progress/{task_id}")
 async def get_progress(task_id: str) -> dict:
     """Poll computation progress for a running task. Returns {pct: 0–100}."""
@@ -536,6 +528,185 @@ async def compute_interference(
         stats=stats,
     )
 
+
+# ---------------------------------------------------------------------------
+# Evaporation duct (pywaveprop / parabolic equation)
+# ---------------------------------------------------------------------------
+
+_duct_available = False
+try:
+    from rwp.environment import Troposphere, evaporation_duct  # type: ignore[import]
+    from rwp.sspade import (  # type: ignore[import]
+        TroposphericRadioWaveSSPadePropagator,
+        HelmholtzPropagatorComputationalParams,
+        GaussAntenna,
+    )
+    import matplotlib  # type: ignore[import]
+    matplotlib.use("Agg")          # non-interactive backend — must be set before pyplot import
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    _duct_available = True
+    logger.info("pywaveprop (rwp) loaded — evaporation duct propagation enabled.")
+except Exception as _duct_exc:
+    logger.warning("pywaveprop not available (%s) — duct endpoint will return 503.", _duct_exc)
+
+
+class DuctRequest(BaseModel):
+    freq_mhz:      float = Field(3000.0, ge=100.0,  le=30_000.0, description="Carrier frequency (MHz).")
+    tx_height_m:   float = Field(10.0,   ge=0.5,    le=500.0,    description="Transmitter antenna height (m).")
+    duct_height_m: float = Field(15.0,   ge=1.0,    le=200.0,    description="Evaporation duct height (m).")
+    max_range_km:  float = Field(100.0,  ge=5.0,    le=500.0,    description="Maximum propagation range (km).")
+    max_height_m:  float = Field(300.0,  ge=50.0,   le=2_000.0,  description="Maximum display height (m).")
+    polarz:        str   = Field("H",    pattern="^[HVhv]$",     description="Polarisation: H or V.")
+
+
+class DuctResponse(BaseModel):
+    image_b64: str
+    stats: dict
+
+
+def _compute_duct(req: DuctRequest) -> DuctResponse:
+    """Run a 2-D parabolic-equation propagation and return a path-loss heatmap."""
+    freq_hz   = req.freq_mhz * 1e6
+    wavelength = 3e8 / freq_hz
+
+    # Environment: evaporation duct M-profile (homogeneous along range)
+    env = Troposphere()
+    env.M_profile = lambda x, z: evaporation_duct(height=req.duct_height_m, z_grid_m=z)
+
+    # Source: narrow Gaussian beam aimed at horizon
+    antenna = GaussAntenna(
+        freq_hz=freq_hz,
+        height=req.tx_height_m,
+        beam_width=3,
+        elevation_angle=0,
+        polarz=req.polarz.upper(),
+    )
+
+    max_range_m = req.max_range_km * 1e3
+
+    # Grid resolution: ~500 m range steps; ≤2 m vertical steps (capped at 500 points)
+    dx_wl  = max(500.0   / wavelength, 50.0)
+    dz_wl  = max(req.max_height_m / 500.0 / wavelength, 1.0)
+
+    params = HelmholtzPropagatorComputationalParams(
+        max_height_m=req.max_height_m,
+        dx_wl=dx_wl,
+        dz_wl=dz_wl,
+    )
+
+    prop = TroposphericRadioWaveSSPadePropagator(
+        antenna=antenna,
+        env=env,
+        max_range_m=max_range_m,
+        comp_params=params,
+    )
+    f  = prop.calculate()
+    pl = f.path_loss()
+
+    # pl.field shape: (n_range, n_height) — transpose so rows=height for imshow
+    x_km = pl.x_grid / 1_000.0
+    z_m  = pl.z_grid
+    data = pl.field.T  # (n_height, n_range)
+
+    # Clip to 2nd–98th percentile to avoid extreme outliers near TX distorting colours
+    p2, p98 = float(np.nanpercentile(data, 2)), float(np.nanpercentile(data, 98))
+    data_clamp = np.clip(data, p2, p98)
+
+    # ---- Matplotlib figure (dark theme to match UI) -------------------------
+    fig, ax = plt.subplots(figsize=(10, 4), facecolor="#0c101e")
+    ax.set_facecolor("#0c101e")
+
+    # RdYlGn_r: green=low loss (ducting), red=high loss (blocked)
+    im = ax.imshow(
+        data_clamp,
+        origin="lower",
+        aspect="auto",
+        extent=[float(x_km[0]), float(x_km[-1]), float(z_m[0]), float(z_m[-1])],
+        cmap="RdYlGn_r",
+        interpolation="bilinear",
+        vmin=p2,
+        vmax=p98,
+    )
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+    cbar.set_label("Path loss (dB)", color="#d8e0f0", fontsize=9)
+    cbar.ax.yaxis.set_tick_params(color="#d8e0f0", labelcolor="#d8e0f0")
+    plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="#d8e0f0")
+
+    ax.set_xlabel("Range (km)",  color="#d8e0f0", fontsize=10)
+    ax.set_ylabel("Height (m)", color="#d8e0f0", fontsize=10)
+    ax.tick_params(colors="#d8e0f0")
+    for spine in ax.spines.values():
+        spine.set_color("#46485a")
+
+    ax.set_title(
+        f"Evaporation duct — {req.freq_mhz:.0f} MHz  |  "
+        f"Duct {req.duct_height_m:.0f} m  |  TX {req.tx_height_m:.0f} m  |  Pol {req.polarz.upper()}",
+        color="#4a9eff", fontsize=10, pad=8,
+    )
+
+    # Reference lines
+    ax.axhline(req.tx_height_m,   color="#ffffff", linewidth=0.8,
+               linestyle="--", alpha=0.55, label=f"TX height ({req.tx_height_m:.0f} m)")
+    ax.axhline(req.duct_height_m, color="#ffa040", linewidth=1.0,
+               linestyle=":",  alpha=0.85, label=f"Duct ceiling ({req.duct_height_m:.0f} m)")
+    ax.legend(fontsize=8, facecolor="#0c101e", labelcolor="#d8e0f0",
+              edgecolor="#46485a", loc="upper right")
+
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, facecolor="#0c101e")
+    plt.close(fig)
+
+    image_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    stats = {
+        "freq_mhz":      req.freq_mhz,
+        "duct_height_m": req.duct_height_m,
+        "tx_height_m":   req.tx_height_m,
+        "max_range_km":  req.max_range_km,
+        "polarz":        req.polarz.upper(),
+        "pl_min_db":     round(p2,  1),
+        "pl_max_db":     round(p98, 1),
+        "pl_range_db":   round(p98 - p2, 1),
+    }
+    return DuctResponse(image_b64=image_b64, stats=stats)
+
+
+@app.get("/api/capabilities")
+async def capabilities() -> dict:  # type: ignore[override]  # shadows earlier def
+    return {
+        "native_propagation": _native_available,
+        "srtm_terrain":       _terrain_available,
+        "duct_propagation":   _duct_available,
+    }
+
+
+@app.post("/api/duct", response_model=DuctResponse)
+async def compute_duct(req: DuctRequest) -> DuctResponse:
+    """
+    Compute a 2-D range × height path-loss field using a parabolic equation
+    (pywaveprop / SSPadé) with an evaporation duct M-profile.
+
+    Returns a dark-themed PNG heatmap (base64) showing the duct trapping effect.
+    """
+    if not _duct_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="pywaveprop not installed")
+
+    logger.info(
+        "Duct: %.0f MHz  duct %.0f m  tx %.0f m  range %.0f km  pol %s",
+        req.freq_mhz, req.duct_height_m, req.tx_height_m, req.max_range_km, req.polarz.upper(),
+    )
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor, lambda: _compute_duct(req))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import os

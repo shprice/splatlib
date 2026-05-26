@@ -185,6 +185,35 @@
   /* Hide Cesium credits for demo */
   .cesium-widget-credits { display: none !important; }
 
+  /* ---- Duct result panel ---- */
+  #ductPanel {
+    position: absolute;
+    top: 14px; right: 14px;
+    width: 680px;
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #ductImage {
+    width: 100%;
+    border-radius: 6px;
+    display: block;
+  }
+  .duct-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+  }
+  .duct-stat-chip {
+    background: rgba(74,158,255,0.08);
+    border: 1px solid rgba(74,158,255,0.2);
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .duct-stat-chip .dsc-label { font-size: 10px; color: var(--text-dim); }
+  .duct-stat-chip .dsc-val   { font-size: 13px; font-weight: 600; color: var(--text); }
+
   /* ---- Progress overlay ---- */
   #progressOverlay {
     position: absolute; top: 50%; left: 50%;
@@ -244,7 +273,8 @@
   <!-- Mode -->
   <div class="tabs">
     <button class="tab active" id="tabCoverage" onclick="setMode('coverage')">Coverage</button>
-    <button class="tab"        id="tabJamming"  onclick="setMode('jamming')">Jamming / J-S</button>
+    <button class="tab"        id="tabJamming"  onclick="setMode('jamming')">Jamming</button>
+    <button class="tab"        id="tabDuct"     onclick="setMode('duct')">Duct</button>
   </div>
 
   <!-- Coverage mode -->
@@ -321,8 +351,55 @@
     </div>
   </div>
 
+  <!-- Duct mode -->
+  <div id="modeDuct" style="display:none; flex-direction:column; gap:10px;">
+    <div class="emitter-section" style="border-color:rgba(74,158,255,0.35);">
+      <div class="emitter-label"><div class="dot" style="background:#4a9eff"></div>Transmitter</div>
+      <div class="field">
+        <label>Frequency (MHz) <span id="ductFreqVal">3000</span></label>
+        <input type="range" id="ductFreqSlider" min="100" max="10000" step="100" value="3000" oninput="syncSlider('ductFreq')">
+      </div>
+      <div class="field">
+        <label>TX height (m) <span id="ductTxHtVal">10</span></label>
+        <input type="range" id="ductTxHtSlider" min="1" max="200" step="1" value="10" oninput="syncSlider('ductTxHt')">
+      </div>
+    </div>
+
+    <div class="emitter-section" style="border-color:rgba(255,160,64,0.4);">
+      <div class="emitter-label"><div class="dot" style="background:#ffa040"></div>Evaporation duct</div>
+      <div class="field">
+        <label>Duct height (m) <span id="ductHtVal">15</span></label>
+        <input type="range" id="ductHtSlider" min="2" max="80" step="1" value="15" oninput="syncSlider('ductHt')">
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.4;padding:2px 0 0">
+        The height of the evaporation duct layer above sea surface. Typical values: 5–40 m over the ocean.
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Max range (km) <span id="ductRangeVal">100</span></label>
+      <input type="range" id="ductRangeSlider" min="10" max="500" step="10" value="100" oninput="syncSlider('ductRange')">
+    </div>
+    <div class="field">
+      <label>Display height (m) <span id="ductMaxHtVal">300</span></label>
+      <input type="range" id="ductMaxHtSlider" min="50" max="1000" step="50" value="300" oninput="syncSlider('ductMaxHt')">
+    </div>
+
+    <div style="display:flex; gap:10px; align-items:center;">
+      <span style="font-size:11px;color:var(--text-dim);">Polarisation:</span>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+        <input type="radio" name="ductPolarz" value="H" checked style="accent-color:var(--accent)"> H
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+        <input type="radio" name="ductPolarz" value="V" style="accent-color:var(--accent)"> V
+      </label>
+    </div>
+
+    <div id="ductAvailStatus" style="font-size:10px;color:var(--text-dim);display:none;padding:4px 0;"></div>
+  </div>
+
   <!-- Terrain model toggle -->
-  <div style="display:flex; align-items:center; gap:8px; border-top: 1px solid var(--panel-border); padding-top:10px;">
+  <div id="terrainRow" style="display:flex; align-items:center; gap:8px; border-top: 1px solid var(--panel-border); padding-top:10px;">
     <input type="checkbox" id="terrainToggle" checked style="cursor:pointer; accent-color:var(--accent); width:14px; height:14px;">
     <label for="terrainToggle" style="cursor:pointer; font-size:11px; color:var(--text); flex:1;">Terrain propagation (ITM/ITWOM)</label>
     <span id="terrainStatus" title="Checking…" style="font-size:14px; line-height:1; color:var(--text-dim);">●</span>
@@ -336,6 +413,16 @@
 
 <!-- ===== Stats ===== -->
 <div class="panel" id="stats"></div>
+
+<!-- ===== Duct result panel ===== -->
+<div class="panel" id="ductPanel">
+  <div class="stats-title" id="ductPanelTitle">Evaporation duct propagation</div>
+  <img id="ductImage" src="" alt="Duct path-loss heatmap">
+  <div class="duct-stats-grid" id="ductStats"></div>
+  <div style="font-size:10px;color:var(--text-dim);margin-top:2px">
+    Green = low path loss (ducting channel) · Red = high path loss · Dashed white = TX height · Dotted orange = duct ceiling
+  </div>
+</div>
 
 <!-- ===== Legend ===== -->
 <div class="panel" id="legend" style="display:none">
@@ -453,6 +540,7 @@ renderJammerList(); // populate the initial single jammer card
   const dot   = document.getElementById('terrainStatus');
   const sub   = document.getElementById('backendSubtitle');
   const chk   = document.getElementById('terrainToggle');
+  const ductStatus = document.getElementById('ductAvailStatus');
   try {
     const caps = await fetch('/api/capabilities').then(r => r.json());
     if (caps.native_propagation && caps.srtm_terrain) {
@@ -471,6 +559,18 @@ renderJammerList(); // populate the initial single jammer card
       chk.disabled = true;
       chk.title = 'Native library not available';
     }
+    // Duct availability
+    if (ductStatus) {
+      if (caps.duct_propagation) {
+        ductStatus.style.display = 'none';
+      } else {
+        ductStatus.style.display = 'block';
+        ductStatus.style.color   = 'var(--danger)';
+        ductStatus.textContent   = '⚠ pywaveprop not installed — install with: pip install pywaveprop';
+        // Disable compute in duct mode
+        document.getElementById('tabDuct').title = 'pywaveprop not installed';
+      }
+    }
   } catch {
     dot.style.color = 'var(--text-dim)';
     sub.textContent = 'Could not reach backend';
@@ -482,15 +582,35 @@ renderJammerList(); // populate the initial single jammer card
 // ---------------------------------------------------------------------------
 function setMode(m) {
   mode = m;
+  const isDuct = m === 'duct';
+
   document.getElementById('modeCoverage').style.display = m === 'coverage' ? 'flex' : 'none';
   document.getElementById('modeJamming').style.display  = m === 'jamming'  ? 'flex' : 'none';
+  document.getElementById('modeDuct').style.display     = isDuct           ? 'flex' : 'none';
   document.getElementById('modeCoverage').style.flexDirection = 'column';
   document.getElementById('modeJamming').style.flexDirection  = 'column';
+  document.getElementById('modeDuct').style.flexDirection     = 'column';
+
   document.getElementById('tabCoverage').classList.toggle('active', m === 'coverage');
   document.getElementById('tabJamming').classList.toggle('active',  m === 'jamming');
+  document.getElementById('tabDuct').classList.toggle('active',     isDuct);
+
+  // Terrain row not relevant for duct mode (duct uses its own PE model)
+  document.getElementById('terrainRow').style.display = isDuct ? 'none' : 'flex';
+
+  // Hide/show Cesium legend; duct has its own result panel
+  if (isDuct) {
+    document.getElementById('legend').style.display = 'none';
+    document.getElementById('stats').style.display  = 'none';
+  } else {
+    document.getElementById('ductPanel').style.display = 'none';
+  }
+
   updateLegend();
   updateComputeBtn();
-  setStatus('Place an emitter to begin.', '');
+  // Duct mode: enable compute button right away (no map placement required)
+  if (isDuct) document.getElementById('computeBtn').disabled = false;
+  setStatus(isDuct ? 'Adjust parameters then press Compute.' : 'Place an emitter to begin.', '');
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +628,12 @@ const sliderMap = {
   jamThresh:{ slider: 'jamThreshSlider',label: 'jamThreshVal',fmt: v => v },
   radJam:   { slider: 'radJamSlider',   label: 'radJamVal',   fmt: v => v },
   resJam:   { slider: 'resJamSlider',   label: 'resJamVal',   fmt: v => v },
+  // Duct sliders
+  ductFreq:  { slider: 'ductFreqSlider',  label: 'ductFreqVal',  fmt: v => v },
+  ductTxHt:  { slider: 'ductTxHtSlider',  label: 'ductTxHtVal',  fmt: v => v },
+  ductHt:    { slider: 'ductHtSlider',    label: 'ductHtVal',    fmt: v => v },
+  ductRange: { slider: 'ductRangeSlider', label: 'ductRangeVal', fmt: v => v },
+  ductMaxHt: { slider: 'ductMaxHtSlider', label: 'ductMaxHtVal', fmt: v => v },
 };
 
 function syncSlider(key) {
@@ -693,14 +819,26 @@ function hideProgress() {
 // ---------------------------------------------------------------------------
 function updateComputeBtn() {
   const btn = document.getElementById('computeBtn');
-  const ready = mode === 'coverage'
-    ? emitters.coverage !== null
-    : emitters.jammers.some(j => j !== null);
+  let ready;
+  if (mode === 'coverage') {
+    ready = emitters.coverage !== null;
+  } else if (mode === 'jamming') {
+    ready = emitters.jammers.some(j => j !== null);
+  } else {
+    // Duct mode: no emitter placement needed — always ready
+    ready = true;
+  }
   btn.disabled = !ready;
 }
 
 async function compute() {
   const useTerrain = document.getElementById('terrainToggle').checked;
+
+  if (mode === 'duct') {
+    await computeDuct();
+    return;
+  }
+
   showProgress(useTerrain ? 'Computing terrain propagation…' : 'Computing…');
   setStatus('', '');
   document.getElementById('computeBtn').disabled = true;
@@ -771,6 +909,65 @@ async function compute() {
   }
 }
 
+async function computeDuct() {
+  showProgress('Running parabolic equation solver…');
+  setStatus('', '');
+  document.getElementById('computeBtn').disabled = true;
+
+  const polarz = document.querySelector('input[name="ductPolarz"]:checked')?.value || 'H';
+
+  const body = {
+    freq_mhz:      +document.getElementById('ductFreqSlider').value,
+    tx_height_m:   +document.getElementById('ductTxHtSlider').value,
+    duct_height_m: +document.getElementById('ductHtSlider').value,
+    max_range_km:  +document.getElementById('ductRangeSlider').value,
+    max_height_m:  +document.getElementById('ductMaxHtSlider').value,
+    polarz,
+  };
+
+  try {
+    const resp = await fetch('/api/duct', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || `Server error: ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    hideProgress();
+    showDuctResult(data);
+    setStatus('Done.', '');
+  } catch (err) {
+    hideProgress();
+    setStatus(err.message, 'error');
+  } finally {
+    document.getElementById('computeBtn').disabled = false;
+  }
+}
+
+function showDuctResult(data) {
+  const panel = document.getElementById('ductPanel');
+  document.getElementById('ductImage').src = `data:image/png;base64,${data.image_b64}`;
+  panel.style.display = 'flex';
+
+  const s = data.stats;
+  const chips = [
+    { label: 'Frequency',    val: `${s.freq_mhz} MHz` },
+    { label: 'Duct height',  val: `${s.duct_height_m} m` },
+    { label: 'TX height',    val: `${s.tx_height_m} m` },
+    { label: 'Max range',    val: `${s.max_range_km} km` },
+    { label: 'Polarisation', val: s.polarz },
+    { label: 'PL range',     val: `${s.pl_min_db} – ${s.pl_max_db} dB` },
+  ];
+  document.getElementById('ductStats').innerHTML = chips.map(c =>
+    `<div class="duct-stat-chip"><div class="dsc-label">${c.label}</div><div class="dsc-val">${c.val}</div></div>`
+  ).join('');
+}
+
 // ---------------------------------------------------------------------------
 // Overlay rendering
 // ---------------------------------------------------------------------------
@@ -814,6 +1011,12 @@ function updateLegend() {
   const bar    = document.getElementById('legendBar');
   const title  = document.getElementById('legendTitle');
   const labels = document.getElementById('legendLabels');
+  const legend = document.getElementById('legend');
+
+  if (mode === 'duct') {
+    legend.style.display = 'none';
+    return;
+  }
 
   if (mode === 'coverage') {
     bar.className = 'legend-bar signal';
@@ -876,9 +1079,10 @@ function clearAll() {
 
   if (coverageLayerTop) { viewer.imageryLayers.remove(coverageLayerTop, true); coverageLayerTop = null; }
   if (coverageLayer)    { viewer.imageryLayers.remove(coverageLayer,    true); coverageLayer    = null; }
-  document.getElementById('stats').style.display = 'none';
-  document.getElementById('legend').style.display = 'none';
-  document.getElementById('hint').style.display   = 'none';
+  document.getElementById('stats').style.display     = 'none';
+  document.getElementById('legend').style.display    = 'none';
+  document.getElementById('hint').style.display      = 'none';
+  document.getElementById('ductPanel').style.display = 'none';
   placing = null;
 
   // Reset coverage place button
