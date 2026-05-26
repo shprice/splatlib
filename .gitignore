@@ -1,0 +1,52 @@
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ── SRTM tile cache (downloaded at runtime) ──────────────────────────────────
+*.hgt
+srtm_cache/
+
+# ── CMake / C++ build artefacts ──────────────────────────────────────────────
+native/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.vcxproj.user
+*.suo
+*.ncb
+*.sdf
+
+# ── .NET build output ─────────────────────────────────────────────────────────
+SplatLib.NET/bin/
+SplatLib.NET/obj/
+SplatLib.NET.Tests/bin/
+SplatLib.NET.Tests/obj/
+
+# ── VS / Rider / JetBrains ───────────────────────────────────────────────────
+.vs/
+.idea/
+*.DotSettings.user
+
+# ── macOS / Windows cruft ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Temp / logs ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+
+# ── Project-local Claude session memory ──────────────────────────────────────
+.claude/
+
+# ── Corrupt/misnamed artefact ─────────────────────────────────────────────────
+C:src*

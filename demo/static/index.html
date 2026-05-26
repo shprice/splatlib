@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SplatLib — RF Coverage &amp; Jamming Demo</title>
+
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --panel-bg:    rgba(12, 16, 30, 0.92);
+    --panel-border: rgba(70, 120, 200, 0.35);
+    --accent:      #4a9eff;
+    --accent-dim:  #2c5fa0;
+    --danger:      #e05555;
+    --success:     #45cc77;
+    --text:        #d8e0f0;
+    --text-dim:    #7888aa;
+    --input-bg:    rgba(30, 40, 70, 0.8);
+  }
+
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e1a; color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+
+  #cesiumContainer { position: absolute; inset: 0; }
+
+  /* ---- Panels ---- */
+  .panel {
+    position: absolute;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+
+  /* ---- Control panel ---- */
+  #controls {
+    top: 14px; left: 14px;
+    width: 270px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+
+  .panel-title {
+    font-size: 15px; font-weight: 600; color: var(--accent);
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 10px;
+  }
+  .panel-title span { color: var(--text-dim); font-size: 11px; font-weight: 400; display: block; margin-top: 2px; }
+
+  /* ---- Mode tabs ---- */
+  .tabs { display: flex; gap: 6px; }
+  .tab {
+    flex: 1; padding: 6px; border-radius: 6px; border: 1px solid var(--panel-border);
+    background: transparent; color: var(--text-dim); cursor: pointer; text-align: center;
+    transition: all 0.15s;
+  }
+  .tab.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+  .tab:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+
+  /* ---- Token row ---- */
+  .token-row { display: flex; gap: 6px; align-items: center; }
+  .token-row label { color: var(--text-dim); white-space: nowrap; font-size: 11px; }
+  .token-row input { flex: 1; min-width: 0; }
+
+  /* ---- Form fields ---- */
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { color: var(--text-dim); font-size: 11px; display: flex; justify-content: space-between; }
+  .field label span { color: var(--text); font-weight: 500; }
+
+  input[type=text], input[type=number] {
+    width: 100%; padding: 5px 8px; border-radius: 5px;
+    border: 1px solid var(--panel-border); background: var(--input-bg);
+    color: var(--text); font-size: 12px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+
+  input[type=range] {
+    width: 100%; accent-color: var(--accent); cursor: pointer;
+  }
+
+  /* ---- Emitter section ---- */
+  .emitter-section {
+    border: 1px solid var(--panel-border); border-radius: 7px; padding: 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .emitter-section.jammer { border-color: rgba(220, 60, 60, 0.4); }
+  .emitter-label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .emitter-label .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-signal   { background: #4a9eff; }
+  .dot-signal-b { background: #40d9c8; }
+  .dot-jammer   { background: #e05555; }
+  .dot-coverage { background: #45cc77; }
+
+  /* ---- Jammer cards ---- */
+  .jammer-card { margin-bottom: 8px; padding: 8px; border-radius: 6px; background: rgba(224,85,85,0.07); border: 1px solid rgba(220,60,60,0.25); }
+  .jammer-card:last-child { margin-bottom: 0; }
+  .jammer-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .jammer-param-row { display: flex; gap: 6px; margin-top: 6px; }
+  .jammer-param-row .field { flex: 1; }
+  .jammer-param-row input[type=number] { width: 100%; padding: 4px 6px; border-radius: 4px; border: 1px solid var(--panel-border); background: var(--input-bg); color: var(--text); font-size: 11px; outline: none; }
+  .btn-remove { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; margin-left: auto; opacity: 0.7; }
+  .btn-remove:hover { opacity: 1; }
+  .btn-add-jammer { width: 100%; margin-top: 6px; padding: 6px; border-radius: 6px; border: 1px dashed rgba(220,60,60,0.5); background: rgba(224,85,85,0.07); color: #e07070; cursor: pointer; font-size: 12px; text-align: center; transition: all 0.15s; }
+  .btn-add-jammer:hover { border-color: var(--danger); color: var(--danger); background: rgba(224,85,85,0.15); }
+
+  .place-btn {
+    width: 100%; padding: 6px; border-radius: 5px; border: 1px dashed var(--panel-border);
+    background: transparent; color: var(--text-dim); cursor: pointer; font-size: 11px;
+    transition: all 0.15s;
+  }
+  .place-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .place-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(74,158,255,0.1); }
+  .place-btn.placed { border-style: solid; border-color: var(--success); color: var(--success); background: rgba(69,204,119,0.08); }
+
+  /* ---- Compute button ---- */
+  #computeBtn {
+    width: 100%; padding: 9px; border-radius: 6px;
+    background: var(--accent-dim); border: 1px solid var(--accent);
+    color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s; letter-spacing: 0.03em;
+  }
+  #computeBtn:hover { background: var(--accent); }
+  #computeBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  #clearBtn {
+    width: 100%; padding: 6px; border-radius: 5px;
+    background: transparent; border: 1px solid rgba(220,60,60,0.3);
+    color: var(--danger); font-size: 12px; cursor: pointer; transition: all 0.15s;
+  }
+  #clearBtn:hover { background: rgba(220,60,60,0.1); }
+
+  /* ---- Status ---- */
+  #status {
+    font-size: 11px; color: var(--text-dim); min-height: 16px;
+    padding: 4px 0; text-align: center;
+  }
+  #status.loading { color: var(--accent); }
+  #status.error   { color: var(--danger); }
+
+  /* ---- Stats panel ---- */
+  #stats {
+    top: 14px; right: 14px;
+    min-width: 220px; max-width: 280px; display: none;
+  }
+  .stats-title { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row { flex-wrap: wrap; gap: 2px; }
+  .stat-key { color: var(--text-dim); }
+  .stat-val { color: var(--text); font-weight: 500; word-break: break-word; text-align: right; max-width: 160px; }
+  .stat-val.good  { color: var(--success); }
+  .stat-val.warn  { color: #f0a040; }
+  .stat-val.bad   { color: var(--danger); }
+
+  /* ---- Legend ---- */
+  #legend {
+    bottom: 14px; right: 14px;
+    min-width: 140px;
+  }
+  .legend-title { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .legend-bar { height: 12px; border-radius: 3px; margin-bottom: 4px; }
+  .legend-bar.signal { background: linear-gradient(to right, #cc2020, #d4a030, #30cc60); }
+  .legend-bar.jamming { background: linear-gradient(to right, #23c850, #78d220, #ffa500, #ff3c00, #c81414); }
+  .legend-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); }
+
+  /* ---- Cursor hint ---- */
+  #hint {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: var(--panel-bg); border: 1px solid var(--panel-border);
+    border-radius: 8px; padding: 12px 20px; pointer-events: none;
+    font-size: 13px; color: var(--text); text-align: center;
+    display: none;
+  }
+
+  /* Hide Cesium credits for demo */
+  .cesium-widget-credits { display: none !important; }
+
+  /* ---- Progress overlay ---- */
+  #progressOverlay {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 200;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    padding: 28px 36px;
+    min-width: 300px;
+    text-align: center;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.65);
+    display: none;
+  }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 3px solid rgba(74,158,255,0.15);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+    margin: 0 auto 14px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-msg { font-size: 13px; color: var(--text); }
+</style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+
+<!-- Placement hint overlay -->
+<div id="hint">Click on the map to place</div>
+
+<!-- Progress overlay -->
+<div id="progressOverlay">
+  <div class="spinner"></div>
+  <div class="progress-msg" id="progressMsg">Computing…</div>
+</div>
+
+<!-- ===== Main controls ===== -->
+<div class="panel" id="controls">
+
+  <div class="panel-title">
+    SplatLib RF Demo
+    <span id="backendSubtitle">Checking backend…</span>
+  </div>
+
+  <!-- Token -->
+  <div class="token-row">
+    <label>Cesium token</label>
+    <input type="text" id="tokenInput" placeholder="Paste Cesium Ion token…" style="font-size:10px;">
+    <button class="tab" id="applyToken" style="flex:0;padding:5px 8px;white-space:nowrap">Apply</button>
+  </div>
+
+  <!-- Mode -->
+  <div class="tabs">
+    <button class="tab active" id="tabCoverage" onclick="setMode('coverage')">Coverage</button>
+    <button class="tab"        id="tabJamming"  onclick="setMode('jamming')">Jamming / J-S</button>
+  </div>
+
+  <!-- Coverage mode -->
+  <div id="modeCoverage">
+    <div class="emitter-section">
+      <div class="emitter-label"><div class="dot dot-coverage"></div>Emitter</div>
+      <button class="place-btn" id="placeCoverage" onclick="startPlacing('coverage')">
+        ＋ Click to place emitter
+      </button>
+      <div class="field">
+        <label>Frequency (MHz) <span id="freqVal">450</span></label>
+        <input type="range" id="freqSlider" min="30" max="6000" value="450" oninput="syncSlider('freq')">
+      </div>
+      <div class="field">
+        <label>ERP (dBm) <span id="erpVal">43</span></label>
+        <input type="range" id="erpSlider" min="0" max="70" value="43" oninput="syncSlider('erp')">
+      </div>
+      <div class="field">
+        <label>Antenna height (m) <span id="htCovVal">10</span></label>
+        <input type="range" id="htCovSlider" min="1" max="200" value="10" oninput="syncSlider('htCov')">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>RX sensitivity (dBm) <span id="sensVal">−100</span></label>
+      <input type="range" id="sensSlider" min="-130" max="-50" value="-100" oninput="syncSlider('sens')">
+    </div>
+    <div class="field">
+      <label>Radius (km) <span id="radCovVal">50</span></label>
+      <input type="range" id="radCovSlider" min="5" max="200" value="50" oninput="syncSlider('radCov')">
+    </div>
+    <div class="field">
+      <label>Resolution <span id="resCovVal">128</span></label>
+      <input type="range" id="resCovSlider" min="32" max="512" step="32" value="128" oninput="syncSlider('resCov')">
+    </div>
+  </div>
+
+  <!-- Jamming mode -->
+  <div id="modeJamming" style="display:none; flex-direction:column; gap:10px;">
+
+    <!-- Frequency (shared across all jammers) -->
+    <div class="field">
+      <label>Frequency (MHz) <span id="jamFreqVal">450</span></label>
+      <input type="range" id="jamFreqSlider" min="30" max="6000" value="450" oninput="syncSlider('jamFreq')">
+    </div>
+
+    <!-- Receiver (the moving node trying to stay un-jammed) -->
+    <div class="emitter-section">
+      <div class="emitter-label"><div class="dot dot-signal"></div>Receiver</div>
+      <div class="field">
+        <label>Antenna height (m) <span id="rxHtVal">1</span></label>
+        <input type="range" id="rxHtSlider" min="0.5" max="50" step="0.5" value="1" oninput="syncSlider('rxHt')">
+      </div>
+    </div>
+
+    <!-- Jammers (dynamic list) -->
+    <div class="emitter-section jammer">
+      <div class="emitter-label"><div class="dot dot-jammer"></div>Jammers</div>
+      <div id="jammerList"></div>
+      <button class="btn-add-jammer" id="addJammerBtn" onclick="addJammer()">＋ Add jammer</button>
+    </div>
+
+    <div class="field">
+      <label>Jam threshold (dBm) <span id="jamThreshVal">-100</span></label>
+      <input type="range" id="jamThreshSlider" min="-130" max="-50" value="-100" oninput="syncSlider('jamThresh')">
+    </div>
+    <div class="field">
+      <label>Radius (km) <span id="radJamVal">100</span></label>
+      <input type="range" id="radJamSlider" min="5" max="300" value="100" oninput="syncSlider('radJam')">
+    </div>
+    <div class="field">
+      <label>Resolution <span id="resJamVal">128</span></label>
+      <input type="range" id="resJamSlider" min="32" max="512" step="32" value="128" oninput="syncSlider('resJam')">
+    </div>
+  </div>
+
+  <!-- Terrain model toggle -->
+  <div style="display:flex; align-items:center; gap:8px; border-top: 1px solid var(--panel-border); padding-top:10px;">
+    <input type="checkbox" id="terrainToggle" checked style="cursor:pointer; accent-color:var(--accent); width:14px; height:14px;">
+    <label for="terrainToggle" style="cursor:pointer; font-size:11px; color:var(--text); flex:1;">Terrain propagation (ITM/ITWOM)</label>
+    <span id="terrainStatus" title="Checking…" style="font-size:14px; line-height:1; color:var(--text-dim);">●</span>
+  </div>
+
+  <div id="status">Place an emitter to begin.</div>
+  <button id="computeBtn" disabled onclick="compute()">Compute</button>
+  <button id="clearBtn" onclick="clearAll()">Clear</button>
+
+</div>
+
+<!-- ===== Stats ===== -->
+<div class="panel" id="stats"></div>
+
+<!-- ===== Legend ===== -->
+<div class="panel" id="legend" style="display:none">
+  <div class="legend-title" id="legendTitle">Signal strength</div>
+  <div class="legend-bar signal" id="legendBar"></div>
+  <div class="legend-labels" id="legendLabels">
+    <span>Weak</span><span>Strong</span>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let viewer;
+let mode = 'coverage';
+let placing = null; // 'coverage' | 'jammer_0' | 'jammer_1' | ...
+
+const emitters = {
+  coverage: null,   // { lat, lon, entity }
+  jammers:  [null], // array; each slot null until placed
+};
+
+// Per-jammer ERP / height values — persisted across renderJammerList() re-renders
+let jammerParams = [{ erp: 53, ht: 10 }];
+
+let coverageLayer    = null;   // bottom layer (green safe zone, or single coverage layer)
+let coverageLayerTop = null;   // top layer    (red jammed zone — J/S mode only)
+
+// ---------------------------------------------------------------------------
+// Cesium init
+// ---------------------------------------------------------------------------
+function initCesium(token) {
+  Cesium.Ion.defaultAccessToken = token || '';
+
+  if (viewer) {
+    viewer.destroy();
+    document.getElementById('cesiumContainer').innerHTML = '';
+    coverageLayer    = null;
+    coverageLayerTop = null;
+  }
+
+  const hasToken = token && token.length > 10;
+
+  const viewerOpts = {
+    animation: false,
+    baseLayerPicker: false,
+    fullscreenButton: false,
+    vrButton: false,
+    geocoder: false,
+    homeButton: false,
+    infoBox: false,
+    sceneModePicker: false,
+    selectionIndicator: false,
+    timeline: false,
+    navigationHelpButton: false,
+    creditContainer: document.createElement('div'),
+    requestRenderMode: false,  // keep render loop running so tiles load
+  };
+
+  // Use OSM base layer — works without a Cesium Ion token.
+  // UrlTemplateImageryProvider is used because OpenStreetMapImageryProvider
+  // was deprecated (async-only) in Cesium 1.104+.
+  const osmProvider = new Cesium.UrlTemplateImageryProvider({
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    maximumLevel: 19,
+    credit: '© OpenStreetMap contributors',
+  });
+  viewerOpts.baseLayer = new Cesium.ImageryLayer(osmProvider);
+  viewerOpts.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+
+  viewer = new Cesium.Viewer('cesiumContainer', viewerOpts);
+
+  if (hasToken) {
+    // Upgrade to Cesium World Terrain when a valid token is supplied
+    Cesium.createWorldTerrainAsync().then(tp => {
+      viewer.terrainProvider = tp;
+    }).catch(() => {
+      setStatus('Terrain load failed — check token.', 'error');
+    });
+  }
+
+  // Fly to UK by default
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(-1.5, 52.5, 700_000),
+    duration: 1.5,
+  });
+
+  // Click handler
+  viewer.screenSpaceEventHandler.setInputAction(onMapClick, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
+
+// ---------------------------------------------------------------------------
+// Token
+// ---------------------------------------------------------------------------
+document.getElementById('applyToken').addEventListener('click', () => {
+  const tok = document.getElementById('tokenInput').value.trim();
+  if (tok) {
+    localStorage.setItem('cesiumToken', tok);
+  } else {
+    localStorage.removeItem('cesiumToken');
+  }
+  initCesium(tok);
+  setStatus('Cesium reinitialised.', '');
+});
+
+// Restore saved token and initialise on load
+const _savedToken = localStorage.getItem('cesiumToken') || '';
+if (_savedToken) document.getElementById('tokenInput').value = _savedToken;
+initCesium(_savedToken);
+renderJammerList(); // populate the initial single jammer card
+
+// Query backend capabilities and update terrain-toggle indicator
+(async function checkCapabilities() {
+  const dot   = document.getElementById('terrainStatus');
+  const sub   = document.getElementById('backendSubtitle');
+  const chk   = document.getElementById('terrainToggle');
+  try {
+    const caps = await fetch('/api/capabilities').then(r => r.json());
+    if (caps.native_propagation && caps.srtm_terrain) {
+      dot.style.color = 'var(--success)';
+      dot.title = 'ITM/ITWOM + SRTM terrain available';
+      sub.textContent = 'ITM/ITWOM propagation · SRTM terrain';
+    } else if (caps.native_propagation) {
+      dot.style.color = 'var(--accent)';
+      dot.title = 'Native propagation available — SRTM will download on first use';
+      sub.textContent = 'ITM/ITWOM propagation · SRTM on demand';
+    } else {
+      dot.style.color = 'var(--danger)';
+      dot.title = 'Native splatlib.dll not found — using FSPL fallback';
+      sub.textContent = 'FSPL fallback (native library not loaded)';
+      chk.checked = false;
+      chk.disabled = true;
+      chk.title = 'Native library not available';
+    }
+  } catch {
+    dot.style.color = 'var(--text-dim)';
+    sub.textContent = 'Could not reach backend';
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Mode switching
+// ---------------------------------------------------------------------------
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeCoverage').style.display = m === 'coverage' ? 'flex' : 'none';
+  document.getElementById('modeJamming').style.display  = m === 'jamming'  ? 'flex' : 'none';
+  document.getElementById('modeCoverage').style.flexDirection = 'column';
+  document.getElementById('modeJamming').style.flexDirection  = 'column';
+  document.getElementById('tabCoverage').classList.toggle('active', m === 'coverage');
+  document.getElementById('tabJamming').classList.toggle('active',  m === 'jamming');
+  updateLegend();
+  updateComputeBtn();
+  setStatus('Place an emitter to begin.', '');
+}
+
+// ---------------------------------------------------------------------------
+// Slider sync
+// ---------------------------------------------------------------------------
+const sliderMap = {
+  freq:     { slider: 'freqSlider',     label: 'freqVal',     fmt: v => v },
+  erp:      { slider: 'erpSlider',      label: 'erpVal',      fmt: v => v },
+  htCov:    { slider: 'htCovSlider',    label: 'htCovVal',    fmt: v => v },
+  sens:     { slider: 'sensSlider',     label: 'sensVal',     fmt: v => `−${Math.abs(v)}` },
+  radCov:   { slider: 'radCovSlider',   label: 'radCovVal',   fmt: v => v },
+  resCov:   { slider: 'resCovSlider',   label: 'resCovVal',   fmt: v => v },
+  jamFreq:  { slider: 'jamFreqSlider',  label: 'jamFreqVal',  fmt: v => v },
+  rxHt:     { slider: 'rxHtSlider',     label: 'rxHtVal',     fmt: v => v },
+  jamThresh:{ slider: 'jamThreshSlider',label: 'jamThreshVal',fmt: v => v },
+  radJam:   { slider: 'radJamSlider',   label: 'radJamVal',   fmt: v => v },
+  resJam:   { slider: 'resJamSlider',   label: 'resJamVal',   fmt: v => v },
+};
+
+function syncSlider(key) {
+  const { slider, label, fmt } = sliderMap[key];
+  const v = document.getElementById(slider).value;
+  document.getElementById(label).textContent = fmt(v);
+}
+
+// ---------------------------------------------------------------------------
+// Jammer card management
+// ---------------------------------------------------------------------------
+function renderJammerList() {
+  const container = document.getElementById('jammerList');
+  if (!container) return;
+  container.innerHTML = '';
+
+  emitters.jammers.forEach((jam, idx) => {
+    const placed  = jam !== null;
+    const p       = jammerParams[idx] || { erp: 53, ht: 10 };
+    const card    = document.createElement('div');
+    card.className = 'jammer-card';
+    card.id        = `jammer-card-${idx}`;
+    card.innerHTML = `
+      <div class="jammer-card-header">
+        <div class="dot dot-jammer" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"></div>
+        Jammer ${idx + 1}
+        <button class="btn-remove" onclick="removeJammer(${idx})" title="Remove jammer ${idx+1}">×</button>
+      </div>
+      <button class="place-btn${placed ? ' placed' : ''}" id="placeJammer_${idx}"
+              onclick="startPlacing('jammer_${idx}')">
+        ${placed ? `✓ JAM${idx+1} placed — click to reposition` : `＋ Click to place Jammer ${idx+1}`}
+      </button>
+      <div class="jammer-param-row">
+        <div class="field">
+          <label>ERP (dBm) <span style="color:var(--text-dim);font-weight:400">0–100</span></label>
+          <input type="number" id="jamErp_${idx}" value="${p.erp}" min="0" max="100" step="1"
+                 oninput="jammerParams[${idx}].erp = Math.min(Math.max(+this.value||0, 0), 100)"
+                 onchange="jammerParams[${idx}].erp = Math.min(Math.max(+this.value||0, 0), 100); this.value = jammerParams[${idx}].erp">
+        </div>
+        <div class="field">
+          <label>Height (m) <span style="color:var(--text-dim);font-weight:400">1–500</span></label>
+          <input type="number" id="jamHt_${idx}" value="${p.ht}" min="1" max="500" step="1"
+                 oninput="jammerParams[${idx}].ht = Math.min(Math.max(+this.value||1, 1), 500)"
+                 onchange="jammerParams[${idx}].ht = Math.min(Math.max(+this.value||1, 1), 500); this.value = jammerParams[${idx}].ht">
+        </div>
+      </div>`;
+    container.appendChild(card);
+  });
+
+  const addBtn = document.getElementById('addJammerBtn');
+  if (addBtn) addBtn.style.display = emitters.jammers.length >= 4 ? 'none' : '';
+}
+
+function addJammer() {
+  if (emitters.jammers.length >= 4) return;
+  emitters.jammers.push(null);
+  jammerParams.push({ erp: 53, ht: 10 });
+  renderJammerList();
+}
+
+function removeJammer(idx) {
+  if (emitters.jammers[idx]?.entity) viewer.entities.remove(emitters.jammers[idx].entity);
+  emitters.jammers.splice(idx, 1);
+  jammerParams.splice(idx, 1);
+  if (emitters.jammers.length === 0) { emitters.jammers.push(null); jammerParams.push({ erp: 53, ht: 10 }); }
+  renderJammerList();
+  updateComputeBtn();
+}
+
+// ---------------------------------------------------------------------------
+// Emitter placement
+// ---------------------------------------------------------------------------
+function startPlacing(type) {
+  placing = type;
+  const hint = document.getElementById('hint');
+  hint.style.display = 'block';
+  if (type === 'coverage') {
+    hint.textContent = '🟢 Click to place emitter';
+  } else if (type.startsWith('jammer_')) {
+    const n = +type.split('_')[1] + 1;
+    hint.textContent = `🔴 Click to place Jammer ${n}`;
+  }
+  // Highlight active place button, un-highlight others
+  document.querySelectorAll('.place-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = type.startsWith('jammer_')
+    ? document.getElementById(`placeJammer_${type.split('_')[1]}`)
+    : document.getElementById(type === 'coverage' ? 'placeCoverage' : null);
+  if (activeBtn) activeBtn.classList.add('active');
+}
+
+function onMapClick(event) {
+  if (!placing) return;
+  const ray = viewer.camera.getPickRay(event.position);
+  const pos = viewer.scene.globe.pick(ray, viewer.scene);
+  if (!pos) return;
+  const cart = Cesium.Cartographic.fromCartesian(pos);
+  const lat  = Cesium.Math.toDegrees(cart.latitude);
+  const lon  = Cesium.Math.toDegrees(cart.longitude);
+  placeEmitter(placing, lat, lon);
+  placing = null;
+  document.getElementById('hint').style.display = 'none';
+  updateComputeBtn();
+}
+
+function placeEmitter(type, lat, lon) {
+  if (type.startsWith('jammer_')) {
+    const idx = +type.split('_')[1];
+    if (emitters.jammers[idx]?.entity) viewer.entities.remove(emitters.jammers[idx].entity);
+    const label = `JAM${idx + 1}`;
+    const entity = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+      billboard: { image: makeMarkerCanvas(Cesium.Color.TOMATO, label), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: { text: `${label}\n${lat.toFixed(4)}°, ${lon.toFixed(4)}°`, font: '11px Segoe UI', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 2, style: Cesium.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: Cesium.VerticalOrigin.TOP, pixelOffset: new Cesium.Cartesian2(0, 6), heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    });
+    emitters.jammers[idx] = { lat, lon, entity };
+    const btn = document.getElementById(`placeJammer_${idx}`);
+    if (btn) { btn.classList.remove('active'); btn.classList.add('placed'); btn.textContent = `✓ JAM${idx+1} placed — click to reposition`; }
+    return;
+  }
+
+  // Coverage emitter
+  if (emitters[type]?.entity) viewer.entities.remove(emitters[type].entity);
+  const entity = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+    billboard: { image: makeMarkerCanvas(Cesium.Color.LIMEGREEN, 'TX'), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: { text: `TX\n${lat.toFixed(4)}°, ${lon.toFixed(4)}°`, font: '11px Segoe UI', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 2, style: Cesium.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: Cesium.VerticalOrigin.TOP, pixelOffset: new Cesium.Cartesian2(0, 6), heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+  });
+  emitters[type] = { lat, lon, entity };
+  const btn = document.getElementById('placeCoverage');
+  if (btn) { btn.classList.remove('active'); btn.classList.add('placed'); btn.textContent = '✓ TX placed — click to reposition'; }
+}
+
+function makeMarkerCanvas(color, label) {
+  const c = document.createElement('canvas');
+  c.width = 48; c.height = 56;
+  const ctx = c.getContext('2d');
+
+  // Pin shape
+  ctx.beginPath();
+  ctx.arc(24, 20, 16, 0, Math.PI * 2);
+  ctx.fillStyle = color.toCssColorString();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Spike
+  ctx.beginPath();
+  ctx.moveTo(24, 56);
+  ctx.lineTo(16, 32);
+  ctx.lineTo(32, 32);
+  ctx.closePath();
+  ctx.fillStyle = color.toCssColorString();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 24, 20);
+
+  return c.toDataURL();
+}
+
+// ---------------------------------------------------------------------------
+// Progress overlay
+// ---------------------------------------------------------------------------
+function showProgress(msg) {
+  document.getElementById('progressMsg').textContent = msg || 'Computing…';
+  document.getElementById('progressOverlay').style.display = 'block';
+}
+
+function hideProgress() {
+  document.getElementById('progressOverlay').style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Compute
+// ---------------------------------------------------------------------------
+function updateComputeBtn() {
+  const btn = document.getElementById('computeBtn');
+  const ready = mode === 'coverage'
+    ? emitters.coverage !== null
+    : emitters.jammers.some(j => j !== null);
+  btn.disabled = !ready;
+}
+
+async function compute() {
+  const useTerrain = document.getElementById('terrainToggle').checked;
+  showProgress(useTerrain ? 'Computing terrain propagation…' : 'Computing…');
+  setStatus('', '');
+  document.getElementById('computeBtn').disabled = true;
+
+  try {
+    let url, body;
+
+    if (mode === 'coverage') {
+      const e = emitters.coverage;
+      url = '/api/coverage';
+      body = {
+        emitter: {
+          lat: e.lat, lon: e.lon,
+          antenna_height_m: +document.getElementById('htCovSlider').value,
+          erp_dbm:  +document.getElementById('erpSlider').value,
+          gain_dbi: 2.15,
+          freq_mhz: +document.getElementById('freqSlider').value,
+        },
+        grid: {
+          radius_m:   +document.getElementById('radCovSlider').value * 1000,
+          resolution: +document.getElementById('resCovSlider').value,
+        },
+        rx_sensitivity_dbm: +document.getElementById('sensSlider').value,
+        use_terrain: useTerrain,
+      };
+    } else {
+      const freq = +document.getElementById('jamFreqSlider').value;
+      url = '/api/interference';
+
+      // Build jammer TX list (only placed jammers)
+      const jammer_txs = emitters.jammers
+        .map((j, i) => j ? { lat: j.lat, lon: j.lon, freq_mhz: freq, gain_dbi: 2.15,
+          erp_dbm: jammerParams[i]?.erp ?? 53,
+          antenna_height_m: jammerParams[i]?.ht ?? 10 } : null)
+        .filter(j => j !== null);
+
+      body = {
+        jammer_txs,
+        rx_height_m:      +document.getElementById('rxHtSlider').value,
+        jam_threshold_dbm:+document.getElementById('jamThreshSlider').value,
+        grid: {
+          radius_m:   +document.getElementById('radJamSlider').value * 1000,
+          resolution: +document.getElementById('resJamSlider').value,
+        },
+        use_terrain: useTerrain,
+      };
+    }
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+
+    hideProgress();
+
+    await renderOverlay(data);
+    showStats(data.stats, mode);
+    setStatus('Done.', '');
+  } catch (err) {
+    hideProgress();
+    setStatus(err.message, 'error');
+  } finally {
+    document.getElementById('computeBtn').disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Overlay rendering
+// ---------------------------------------------------------------------------
+async function renderOverlay(data) {
+  // Remove old layers (top first, then bottom)
+  if (coverageLayerTop) { viewer.imageryLayers.remove(coverageLayerTop, true); coverageLayerTop = null; }
+  if (coverageLayer)    { viewer.imageryLayers.remove(coverageLayer,    true); coverageLayer    = null; }
+
+  const b = data.bounds;
+  const rect = Cesium.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
+
+  // Helper: decode a base64 PNG string into a Cesium imagery layer
+  async function addLayer(b64, alpha) {
+    const blob    = await fetch(`data:image/png;base64,${b64}`).then(r => r.blob());
+    const blobUrl = URL.createObjectURL(blob);
+    const provider = await Cesium.SingleTileImageryProvider.fromUrl(blobUrl, { rectangle: rect });
+    const layer    = viewer.imageryLayers.addImageryProvider(provider);
+    layer.alpha    = alpha;
+    return layer;
+  }
+
+  // Bottom layer: green safe zone (or single coverage image for coverage mode)
+  coverageLayer = await addLayer(data.image_b64, 0.80);
+
+  // Top layer: red jammed zone — only present for J/S responses
+  if (data.image_b64_top) {
+    coverageLayerTop = await addLayer(data.image_b64_top, 0.88);
+  }
+
+  // Fly to coverage area
+  viewer.camera.flyTo({ destination: rect, duration: 1.2 });
+
+  updateLegend();
+  document.getElementById('legend').style.display = 'block';
+}
+
+// ---------------------------------------------------------------------------
+// Legend
+// ---------------------------------------------------------------------------
+function updateLegend() {
+  const bar    = document.getElementById('legendBar');
+  const title  = document.getElementById('legendTitle');
+  const labels = document.getElementById('legendLabels');
+
+  if (mode === 'coverage') {
+    bar.className = 'legend-bar signal';
+    title.textContent = 'Signal strength';
+    labels.innerHTML = '<span>Weak (at threshold)</span><span>Strong</span>';
+  } else {
+    bar.className = 'legend-bar jamming';
+    title.textContent = 'Jammer coverage';
+    labels.innerHTML = '<span>Safe</span><span style="text-align:center">Marginal</span><span>Jammed</span>';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stats panel
+// ---------------------------------------------------------------------------
+function showStats(stats, m) {
+  const panel = document.getElementById('stats');
+  panel.style.display = 'block';
+
+  const rows = [];
+  if (m === 'coverage') {
+    rows.push(['Model', stats.model, '']);
+    rows.push(['Coverage', `${stats.coverage_pct.toFixed(1)} %`,
+      stats.coverage_pct > 60 ? 'good' : stats.coverage_pct > 30 ? 'warn' : 'bad']);
+    rows.push(['Peak signal', `${stats.max_signal_dbm.toFixed(1)} dBm`, 'good']);
+    if (stats.edge_signal_dbm != null)
+      rows.push(['Edge signal', `${stats.edge_signal_dbm.toFixed(1)} dBm`, 'warn']);
+  } else {
+    rows.push(['Model', stats.model, '']);
+    rows.push(['Jammed area',   `${stats.jammed_area_pct.toFixed(1)} %`,
+      stats.jammed_area_pct > 30 ? 'bad' : stats.jammed_area_pct > 10 ? 'warn' : 'good']);
+    if (stats.marginal_area_pct != null)
+      rows.push(['Marginal area', `${stats.marginal_area_pct.toFixed(1)} %`,
+        stats.marginal_area_pct > 30 ? 'warn' : '']);
+    rows.push(['Peak jam power', `${stats.max_jam_dbm.toFixed(1)} dBm`, 'bad']);
+    rows.push(['Min jam power',  `${stats.min_jam_dbm.toFixed(1)} dBm`, 'good']);
+    rows.push(['Threshold', `${stats.threshold_dbm} dBm`, '']);
+  }
+
+  const subtitle = (m !== 'coverage')
+    ? '<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">Marginal = within 10 dB of threshold</div>'
+    : '';
+  const title = `<div class="stats-title">${m === 'coverage' ? 'Coverage stats' : 'Jammer coverage stats'}</div>`;
+  panel.innerHTML = title + subtitle + rows.map(([k, v, cls]) =>
+    `<div class="stat-row"><span class="stat-key">${k}</span><span class="stat-val ${cls}">${v}</span></div>`
+  ).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Clear
+// ---------------------------------------------------------------------------
+function clearAll() {
+  // Remove coverage emitter entity
+  if (emitters.coverage?.entity) viewer.entities.remove(emitters.coverage.entity);
+  emitters.coverage = null;
+  // Remove all jammer entities and reset to single empty slot
+  emitters.jammers.forEach(j => { if (j?.entity) viewer.entities.remove(j.entity); });
+  emitters.jammers = [null];
+  jammerParams = [{ erp: 53, ht: 10 }];
+
+  if (coverageLayerTop) { viewer.imageryLayers.remove(coverageLayerTop, true); coverageLayerTop = null; }
+  if (coverageLayer)    { viewer.imageryLayers.remove(coverageLayer,    true); coverageLayer    = null; }
+  document.getElementById('stats').style.display = 'none';
+  document.getElementById('legend').style.display = 'none';
+  document.getElementById('hint').style.display   = 'none';
+  placing = null;
+
+  // Reset coverage place button
+  const _pb = document.getElementById('placeCoverage');
+  if (_pb) { _pb.classList.remove('active', 'placed'); _pb.textContent = '＋ Click to place emitter'; }
+
+  renderJammerList();
+  updateComputeBtn();
+  setStatus('Place an emitter to begin.', '');
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+</script>
+</body>
+</html>
