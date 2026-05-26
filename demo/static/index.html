@@ -249,6 +249,60 @@
   .duct-stat-chip .dsc-label { font-size: 10px; color: var(--text-dim); }
   .duct-stat-chip .dsc-val   { font-size: 13px; font-weight: 600; color: var(--text); }
 
+  /* ---- Settings section ---- */
+  #controls {
+    overflow-y: auto;
+    max-height: calc(100vh - 28px);
+  }
+  #settingsSection { border-top: 1px solid var(--panel-border); padding-top: 2px; }
+  .settings-header {
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; padding: 8px 0 6px;
+    font-size: 12px; color: var(--text-dim); user-select: none;
+    transition: color 0.15s;
+  }
+  .settings-header:hover { color: var(--text); }
+  .settings-group-label {
+    font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 10px 0 6px;
+  }
+  .settings-group-label:first-child { margin-top: 2px; }
+
+  /* Basemap grid — 3 columns × 2 rows */
+  .basemap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .basemap-btn {
+    padding: 7px 4px; border-radius: 6px;
+    border: 1px solid var(--panel-border);
+    background: transparent; color: var(--text-dim);
+    cursor: pointer; text-align: center; font-size: 10px;
+    transition: all 0.15s; line-height: 1.3;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .basemap-btn .bm-icon { font-size: 16px; line-height: 1; }
+  .basemap-btn:hover:not(.active):not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .basemap-btn.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+  .basemap-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+  .basemap-btn .bm-needs-token {
+    font-size: 8px; color: var(--text-dim); line-height: 1;
+    border: 1px solid currentColor; border-radius: 2px; padding: 0 3px;
+    opacity: 0.7;
+  }
+  .basemap-btn.active .bm-needs-token { color: rgba(255,255,255,0.6); }
+
+  /* 3D layer rows */
+  .settings-check-row {
+    display: flex; align-items: center; gap: 7px; padding: 5px 0;
+    font-size: 11px; color: var(--text);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .settings-check-row:last-of-type { border-bottom: none; }
+  .settings-check-row input[type=checkbox] { accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
+  .settings-check-row label { cursor: pointer; flex: 1; }
+  .settings-sub-input {
+    margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.25);
+    border: 1px solid var(--panel-border); border-radius: 6px;
+  }
+
   /* ---- Progress overlay ---- */
   #progressOverlay {
     position: absolute; top: 50%; left: 50%;
@@ -444,6 +498,47 @@
   <button id="computeBtn" disabled onclick="compute()">Compute</button>
   <button id="clearBtn" onclick="clearAll()">Clear</button>
 
+  <!-- ===== Settings section ===== -->
+  <div id="settingsSection">
+    <div class="settings-header" onclick="toggleSettings()">
+      <span>⚙ Map settings</span>
+      <span id="settingsChevron" style="font-size:10px">▾</span>
+    </div>
+    <div id="settingsBody" style="display:none">
+
+      <!-- Base map -->
+      <div class="settings-group-label">Base map</div>
+      <div class="basemap-grid" id="basemapGrid"><!-- populated by JS --></div>
+
+      <!-- 3D layers -->
+      <div class="settings-group-label">3D layers</div>
+      <div class="settings-check-row">
+        <input type="checkbox" id="osmBuildingsToggle"
+               onchange="toggle3DLayer('buildings', this.checked)">
+        <label for="osmBuildingsToggle">
+          OSM Buildings
+          <span style="color:var(--text-dim);font-size:10px"> (Ion token)</span>
+        </label>
+      </div>
+      <div class="settings-check-row">
+        <input type="checkbox" id="google3dToggle"
+               onchange="toggle3DLayer('google3d', this.checked)">
+        <label for="google3dToggle">Google Photorealistic 3D</label>
+      </div>
+      <div id="googleKeyRow" class="settings-sub-input" style="display:none">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">
+          Requires a Google Maps Platform API key with <em>Map Tiles API</em> enabled.
+        </div>
+        <div style="display:flex;gap:4px;">
+          <input type="text" id="googleKeyInput" placeholder="AIza…" style="font-size:10px;flex:1;">
+          <button class="tab" onclick="applyGoogleKey()"
+                  style="flex:0;padding:5px 8px;white-space:nowrap;font-size:11px">Apply</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
 </div>
 
 <!-- ===== Stats ===== -->
@@ -497,6 +592,133 @@ let coverageLayer    = null;   // bottom layer (green safe zone, or single cover
 let coverageLayerTop = null;   // top layer    (red jammed zone — J/S mode only)
 
 // ---------------------------------------------------------------------------
+// Settings — base-map switcher & 3D layers
+// ---------------------------------------------------------------------------
+let _settingsOpen  = false;
+let currentBasemap = localStorage.getItem('basemap') || 'osm';
+let _osmBuildings  = null;   // Cesium3DTileset reference for OSM buildings
+let _google3d      = null;   // Cesium3DTileset reference for Google 3D tiles
+
+// Three free options + three Ion options (fills a 3×2 grid neatly)
+const BASEMAPS = [
+  { id: 'osm',         label: 'OpenStreetMap', icon: '🗺',  free: true,
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' },
+  { id: 'carto_dark',  label: 'Dark',          icon: '🌑',  free: true,
+    url: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png' },
+  { id: 'carto_light', label: 'Light',         icon: '☀',   free: true,
+    url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' },
+  { id: 'bing_aerial', label: 'Bing Aerial',   icon: '🛰',  free: false,
+    ionStyle: 'AERIAL' },
+  { id: 'bing_labels', label: 'Aerial+Labels', icon: '🏷',  free: false,
+    ionStyle: 'AERIAL_WITH_LABELS' },
+  { id: 'bing_road',   label: 'Bing Road',     icon: '🛣',  free: false,
+    ionStyle: 'ROAD' },
+];
+
+function toggleSettings() {
+  _settingsOpen = !_settingsOpen;
+  document.getElementById('settingsBody').style.display = _settingsOpen ? 'block' : 'none';
+  document.getElementById('settingsChevron').textContent = _settingsOpen ? '▴' : '▾';
+}
+
+function renderBasemapButtons() {
+  const hasToken = !!(localStorage.getItem('cesiumToken') || '').trim();
+  document.getElementById('basemapGrid').innerHTML = BASEMAPS.map(bm => {
+    const active   = currentBasemap === bm.id;
+    const disabled = !bm.free && !hasToken;
+    const badge    = (!bm.free)
+      ? `<span class="bm-needs-token">Ion</span>` : '';
+    return `<button class="basemap-btn${active ? ' active' : ''}"
+              onclick="setBasemap('${bm.id}')"
+              ${disabled ? 'disabled title="Cesium Ion token required"' : ''}>
+      <span class="bm-icon">${bm.icon}</span>
+      <span>${bm.label}</span>
+      ${badge}
+    </button>`;
+  }).join('');
+}
+
+async function setBasemap(id) {
+  if (!viewer) return;
+  const bm = BASEMAPS.find(b => b.id === id);
+  if (!bm) return;
+  try {
+    let provider;
+    if (bm.url) {
+      provider = new Cesium.UrlTemplateImageryProvider({
+        url: bm.url, maximumLevel: 19,
+      });
+    } else {
+      // Ion world imagery — async in Cesium 1.104+
+      provider = await Cesium.createWorldImageryAsync({
+        style: Cesium.IonWorldImageryStyle[bm.ionStyle],
+      });
+    }
+    // Swap the base layer (always index 0; coverage overlays sit above it)
+    const layers   = viewer.imageryLayers;
+    const oldBase  = layers.get(0);
+    layers.remove(oldBase, true);
+    layers.addImageryProvider(provider, 0);
+
+    currentBasemap = id;
+    localStorage.setItem('basemap', id);
+    renderBasemapButtons();
+  } catch (err) {
+    console.error('Basemap switch failed:', err);
+    setStatus(`Base map: ${err.message}`, 'error');
+  }
+}
+
+async function toggle3DLayer(type, enabled) {
+  if (type === 'buildings') {
+    if (enabled) {
+      try {
+        const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(96188);
+        _osmBuildings = viewer.scene.primitives.add(tileset);
+      } catch (err) {
+        setStatus(`OSM Buildings: ${err.message}`, 'error');
+        document.getElementById('osmBuildingsToggle').checked = false;
+      }
+    } else if (_osmBuildings) {
+      viewer.scene.primitives.remove(_osmBuildings);
+      _osmBuildings = null;
+    }
+  } else if (type === 'google3d') {
+    document.getElementById('googleKeyRow').style.display = enabled ? 'block' : 'none';
+    if (!enabled && _google3d) {
+      viewer.scene.primitives.remove(_google3d);
+      _google3d = null;
+    } else if (enabled) {
+      // Auto-apply saved key if present
+      const saved = localStorage.getItem('googleMapsKey') || '';
+      if (saved) {
+        document.getElementById('googleKeyInput').value = saved;
+        applyGoogleKey();
+      }
+    }
+  }
+}
+
+async function applyGoogleKey() {
+  const key = document.getElementById('googleKeyInput').value.trim();
+  if (!key) { setStatus('Enter a Google Maps API key.', 'error'); return; }
+  localStorage.setItem('googleMapsKey', key);
+
+  if (_google3d) { viewer.scene.primitives.remove(_google3d); _google3d = null; }
+  try {
+    const tileset = await Cesium.Cesium3DTileset.fromUrl(
+      `https://tile.googleapis.com/v1/3dtiles/root.json?key=${key}`
+    );
+    _google3d = viewer.scene.primitives.add(tileset);
+    setStatus('Google 3D Tiles loaded.', '');
+  } catch (err) {
+    setStatus(`Google 3D: ${err.message}`, 'error');
+    document.getElementById('google3dToggle').checked = false;
+    document.getElementById('googleKeyRow').style.display = 'none';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cesium init
 // ---------------------------------------------------------------------------
 function initCesium(token) {
@@ -507,6 +729,13 @@ function initCesium(token) {
     document.getElementById('cesiumContainer').innerHTML = '';
     coverageLayer    = null;
     coverageLayerTop = null;
+    // 3D layer primitives are destroyed with the viewer — clear references & checkboxes
+    _osmBuildings = null;
+    _google3d     = null;
+    const obChk = document.getElementById('osmBuildingsToggle');
+    const g3Chk = document.getElementById('google3dToggle');
+    if (obChk) obChk.checked = false;
+    if (g3Chk) { g3Chk.checked = false; document.getElementById('googleKeyRow').style.display = 'none'; }
   }
 
   const hasToken = token && token.length > 10;
@@ -549,6 +778,11 @@ function initCesium(token) {
     });
   }
 
+  // Restore saved basemap (skip OSM — already the init default; swap anything else)
+  if (currentBasemap && currentBasemap !== 'osm') {
+    setBasemap(currentBasemap);  // async, runs in background
+  }
+
   // Fly to UK by default
   viewer.camera.flyTo({
     destination: Cesium.Cartesian3.fromDegrees(-1.5, 52.5, 700_000),
@@ -570,14 +804,19 @@ document.getElementById('applyToken').addEventListener('click', () => {
     localStorage.removeItem('cesiumToken');
   }
   initCesium(tok);
+  renderBasemapButtons();   // refresh Ion button states now a token is set/cleared
   setStatus('Cesium reinitialised.', '');
 });
 
 // Restore saved token and initialise on load
 const _savedToken = localStorage.getItem('cesiumToken') || '';
 if (_savedToken) document.getElementById('tokenInput').value = _savedToken;
+// Restore saved Google key
+const _savedGoogleKey = localStorage.getItem('googleMapsKey') || '';
+if (_savedGoogleKey) document.getElementById('googleKeyInput').value = _savedGoogleKey;
 initCesium(_savedToken);
-renderJammerList(); // populate the initial single jammer card
+renderJammerList();     // populate the initial single jammer card
+renderBasemapButtons(); // populate basemap grid with correct active/disabled states
 
 // Query backend capabilities and update terrain-toggle indicator
 (async function checkCapabilities() {
