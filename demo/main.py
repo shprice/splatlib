@@ -607,6 +607,27 @@ async def compute_interference(
 # Evaporation duct (pywaveprop / parabolic equation)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# GeoTIFF export (optional — requires tifffile or rasterio)
+# ---------------------------------------------------------------------------
+
+_geotiff_available = False
+try:
+    import tifffile as _tifffile_mod  # noqa: F401
+    _geotiff_available = True
+    logger.info("tifffile available — GeoTIFF export enabled.")
+except ImportError:
+    try:
+        import rasterio as _rasterio_mod  # noqa: F401
+        _geotiff_available = True
+        logger.info("rasterio available — GeoTIFF export enabled.")
+    except ImportError:
+        logger.info("Neither tifffile nor rasterio found — GeoTIFF export disabled.")
+
+# ---------------------------------------------------------------------------
+# Evaporation duct
+# ---------------------------------------------------------------------------
+
 _duct_available = False
 try:
     from rwp.environment import Troposphere, evaporation_duct  # type: ignore[import]
@@ -756,7 +777,99 @@ async def capabilities() -> dict:  # type: ignore[override]  # shadows earlier d
         "native_propagation": _native_available,
         "srtm_terrain":       _terrain_available,
         "duct_propagation":   _duct_available,
+        "geotiff_export":     _geotiff_available,
     }
+
+
+# ---------------------------------------------------------------------------
+# GeoTIFF export endpoint
+# ---------------------------------------------------------------------------
+
+class GeoTiffExportRequest(BaseModel):
+    image_b64: str
+    bounds: Bounds
+
+
+def _make_geotiff(image_b64: str, bounds: Bounds) -> bytes:
+    """
+    Convert a base64-encoded RGBA PNG to a GeoTIFF georeferenced to WGS-84
+    (EPSG:4326).  Tries rasterio first (richest metadata), then falls back to
+    tifffile with manually written GeoTIFF tags.
+    """
+    img = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGBA")
+    arr = np.array(img)                           # (H, W, 4) uint8
+    H, W = arr.shape[:2]
+
+    west, east   = bounds.west,  bounds.east
+    south, north = bounds.south, bounds.north
+
+    px = (east  - west)  / W   # degrees per pixel, longitude
+    py = (north - south) / H   # degrees per pixel, latitude (magnitude)
+
+    buf = io.BytesIO()
+
+    # ── Option A: rasterio ────────────────────────────────────────────────
+    try:
+        import rasterio
+        from rasterio.transform import from_bounds
+        from rasterio.crs import CRS
+        transform = from_bounds(west, south, east, north, W, H)
+        with rasterio.open(buf, "w", driver="GTiff",
+                           height=H, width=W, count=4, dtype="uint8",
+                           crs=CRS.from_epsg(4326), transform=transform) as dst:
+            for i in range(4):
+                dst.write(arr[:, :, i], i + 1)
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    # ── Option B: tifffile + manual GeoTIFF tags (WGS-84 geographic CRS) ─
+    import tifffile  # type: ignore[import]
+
+    pixel_scale = (px, py, 0.0)
+    # ModelTiepointTag: (I, J, K, X, Y, Z) — pixel (0,0) = upper-left geo corner
+    tiepoint = (0.0, 0.0, 0.0, west, north, 0.0)
+    # GeoKeyDirectoryTag — 3 keys: ModelType=Geographic, RasterType=PixelIsArea, GCS=WGS-84
+    geo_keys = [
+        1, 1, 0, 3,           # Version, Revision, Minor, NumKeys
+        1024, 0, 1, 2,        # GTModelTypeGeoKey    = 2  (Geographic)
+        1025, 0, 1, 1,        # GTRasterTypeGeoKey   = 1  (PixelIsArea)
+        2048, 0, 1, 4326,     # GeographicTypeGeoKey = 4326 (WGS-84)
+    ]
+
+    with tifffile.TiffWriter(buf) as tif:
+        tif.write(
+            arr,
+            photometric="rgb",
+            extrasamples=(2,),          # 2 = EXTRASAMPLE_UNASSALPHA
+            extratags=[
+                (33550, "d", 3, pixel_scale, False),   # ModelPixelScaleTag  (DOUBLE×3)
+                (33922, "d", 6, tiepoint,    False),   # ModelTiepointTag    (DOUBLE×6)
+                (34736, "H", 16, geo_keys,   False),   # GeoKeyDirectoryTag  (SHORT×16)
+            ],
+        )
+    return buf.getvalue()
+
+
+@app.post("/api/export/geotiff")
+async def export_geotiff(req: GeoTiffExportRequest):
+    """Convert the supplied RGBA PNG + bounding box to a WGS-84 GeoTIFF."""
+    if not _geotiff_available:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="GeoTIFF export not available — install tifffile: pip install tifffile",
+        )
+    from fastapi.responses import Response
+    loop = asyncio.get_running_loop()
+    tif_bytes = await loop.run_in_executor(
+        _executor, lambda: _make_geotiff(req.image_b64, req.bounds)
+    )
+    return Response(
+        content=tif_bytes,
+        media_type="image/tiff",
+        headers={"Content-Disposition": 'attachment; filename="splatlib_coverage.tif"'},
+    )
 
 
 @app.post("/api/duct", response_model=DuctResponse)

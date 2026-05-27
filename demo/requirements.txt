@@ -6,3 +6,4 @@ python-multipart>=0.0.6
 srtm.py>=0.3.6
 matplotlib>=3.7.0
 pywaveprop>=1.0.0
+tifffile>=2022.0.0

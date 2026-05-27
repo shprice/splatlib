@@ -588,7 +588,21 @@
 <div class="panel" id="ductPanel">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
     <div class="stats-title" style="margin-bottom:0">Evaporation duct propagation</div>
-    <span style="font-size:10px;color:var(--text-dim);cursor:pointer;" onclick="openDuctLightbox()" title="View full size">⤢ Full size</span>
+    <div style="display:flex;gap:5px;align-items:center;">
+      <button id="ductDownloadBtn" onclick="downloadDuctPng()"
+              style="display:none;font-size:10px;padding:3px 8px;border-radius:4px;
+                     border:1px solid var(--panel-border);background:transparent;
+                     color:var(--accent);cursor:pointer;transition:background 0.15s;"
+              onmouseover="this.style.background='rgba(74,158,255,0.1)'"
+              onmouseout="this.style.background='transparent'">⬇ PNG</button>
+      <button id="ductCopyBtn" onclick="copyDuctImage()"
+              style="display:none;font-size:10px;padding:3px 8px;border-radius:4px;
+                     border:1px solid var(--panel-border);background:transparent;
+                     color:var(--text-dim);cursor:pointer;transition:background 0.15s;"
+              onmouseover="this.style.background='rgba(255,255,255,0.05)'"
+              onmouseout="this.style.background='transparent'">📋 Copy</button>
+      <span style="font-size:10px;color:var(--text-dim);cursor:pointer;" onclick="openDuctLightbox()" title="View full size">⤢ Full size</span>
+    </div>
   </div>
   <img id="ductImage" src="" alt="Duct path-loss heatmap" onclick="openDuctLightbox()">
   <div class="duct-stats-grid" id="ductStats"></div>
@@ -638,6 +652,10 @@ let _settingsOpen  = false;
 let currentBasemap = localStorage.getItem('basemap') || 'osm';
 let _osmBuildings  = null;   // Cesium3DTileset reference for OSM buildings
 let _google3d      = null;   // Cesium3DTileset reference for Google 3D tiles
+
+// Export state
+let _lastExportData        = null;   // { image_b64, bounds, filename } — set after coverage/jamming compute
+let _geotiffExportAvailable = false; // set from /api/capabilities
 
 // Three free options + three Ion options (fills a 3×2 grid neatly)
 const BASEMAPS = [
@@ -885,6 +903,8 @@ renderGroundButtons();  // populate ground type grid
       chk.disabled = true;
       chk.title = 'Native library not available';
     }
+    _geotiffExportAvailable = !!caps.geotiff_export;
+
     // Duct availability
     if (ductStatus) {
       if (caps.duct_propagation) {
@@ -1248,6 +1268,11 @@ async function compute() {
     hideProgress();
 
     await renderOverlay(data);
+    _lastExportData = {
+      image_b64: data.image_b64,
+      bounds:    data.bounds,
+      filename:  mode === 'coverage' ? 'splatlib_coverage.tif' : 'splatlib_jamming.tif',
+    };
     showStats(data.stats, mode);
     setStatus('Done.', '');
   } catch (err) {
@@ -1315,6 +1340,9 @@ function showDuctResult(data) {
   const imgSrc = `data:image/png;base64,${data.image_b64}`;
   document.getElementById('ductImage').src = imgSrc;
   panel.style.display = 'flex';
+  // Reveal download / copy buttons
+  document.getElementById('ductDownloadBtn').style.display = '';
+  document.getElementById('ductCopyBtn').style.display     = '';
 
   const s = data.stats;
   const chips = [
@@ -1422,9 +1450,19 @@ function showStats(stats, m) {
     ? '<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">Marginal = within 10 dB of threshold</div>'
     : '';
   const title = `<div class="stats-title">${m === 'coverage' ? 'Coverage stats' : 'Jammer coverage stats'}</div>`;
+
+  const gtiffDisabled = !_geotiffExportAvailable ? 'disabled title="Install tifffile to enable: pip install tifffile"' : '';
+  const exportRow = `
+    <div style="display:flex;gap:5px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.07);">
+      <button class="tab" id="downloadGtiffBtn" onclick="downloadGeoTiff()" ${gtiffDisabled}
+              style="flex:1;font-size:10px;padding:5px 4px;">⬇ GeoTIFF</button>
+      <button class="tab" id="copyOverlayBtn"   onclick="copyOverlayImage()"
+              style="flex:1;font-size:10px;padding:5px 4px;border-color:rgba(255,255,255,0.15);color:var(--text-dim);">📋 Copy</button>
+    </div>`;
+
   panel.innerHTML = title + subtitle + rows.map(([k, v, cls]) =>
     `<div class="stat-row"><span class="stat-key">${k}</span><span class="stat-val ${cls}">${v}</span></div>`
-  ).join('');
+  ).join('') + exportRow;
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,6 +1492,72 @@ function clearAll() {
   renderJammerList();
   updateComputeBtn();
   setStatus('Place an emitter to begin.', '');
+}
+
+// ---------------------------------------------------------------------------
+// Export — GeoTIFF download & clipboard copy
+// ---------------------------------------------------------------------------
+
+async function downloadGeoTiff() {
+  if (!_lastExportData) return;
+  const btn = document.getElementById('downloadGtiffBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
+  try {
+    const resp = await fetch('/api/export/geotiff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_b64: _lastExportData.image_b64, bounds: _lastExportData.bounds }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || `Server error ${resp.status}`);
+    }
+    _triggerDownload(await resp.blob(), _lastExportData.filename || 'splatlib.tif');
+    if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ GeoTIFF'; }, 2500); }
+  } catch (err) {
+    setStatus('GeoTIFF export failed: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ GeoTIFF'; }
+  }
+}
+
+async function copyOverlayImage() {
+  if (!_lastExportData) return;
+  await _copyB64ToClipboard(_lastExportData.image_b64, document.getElementById('copyOverlayBtn'));
+}
+
+async function downloadDuctPng() {
+  const src = document.getElementById('ductImage').src;
+  if (!src || src === window.location.href) return;
+  const blob = await fetch(src).then(r => r.blob());
+  _triggerDownload(blob, 'splatlib_duct.png');
+}
+
+async function copyDuctImage() {
+  const src = document.getElementById('ductImage').src;
+  if (!src || src === window.location.href) return;
+  // src is "data:image/png;base64,<data>"
+  await _copyB64ToClipboard(src.split(',')[1], document.getElementById('ductCopyBtn'));
+}
+
+function _triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 15_000);
+}
+
+async function _copyB64ToClipboard(b64, btn) {
+  const origText = btn ? btn.textContent : '';
+  try {
+    if (btn) btn.textContent = '⏳';
+    const blob = await fetch('data:image/png;base64,' + b64).then(r => r.blob());
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => { btn.textContent = origText; }, 2500); }
+  } catch (err) {
+    if (btn) btn.textContent = origText;
+    // Clipboard API requires HTTPS or localhost; give actionable hint.
+    setStatus('Copy failed — ' + err.message + '. Use Chrome/Edge on localhost or HTTPS.', 'error');
+  }
 }
 
 // ---------------------------------------------------------------------------
