@@ -570,17 +570,10 @@
       <div class="settings-check-row">
         <input type="checkbox" id="google3dToggle"
                onchange="toggle3DLayer('google3d', this.checked)">
-        <label for="google3dToggle">Google Photorealistic 3D</label>
-      </div>
-      <div id="googleKeyRow" class="settings-sub-input" style="display:none">
-        <div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">
-          Requires a Google Maps Platform API key with <em>Map Tiles API</em> enabled.
-        </div>
-        <div style="display:flex;gap:4px;">
-          <input type="text" id="googleKeyInput" placeholder="AIza…" style="font-size:10px;flex:1;">
-          <button class="tab" onclick="applyGoogleKey()"
-                  style="flex:0;padding:5px 8px;white-space:nowrap;font-size:11px">Apply</button>
-        </div>
+        <label for="google3dToggle">
+          Google Photorealistic 3D
+          <span style="color:var(--text-dim);font-size:10px"> (Ion token)</span>
+        </label>
       </div>
 
     </div>
@@ -756,37 +749,17 @@ async function toggle3DLayer(type, enabled) {
       _osmBuildings = null;
     }
   } else if (type === 'google3d') {
-    document.getElementById('googleKeyRow').style.display = enabled ? 'block' : 'none';
-    if (!enabled && _google3d) {
-      viewer.scene.primitives.remove(_google3d);
-      _google3d = null;
-    } else if (enabled) {
-      // Auto-apply saved key if present
-      const saved = localStorage.getItem('googleMapsKey') || '';
-      if (saved) {
-        document.getElementById('googleKeyInput').value = saved;
-        applyGoogleKey();
+    if (!enabled) {
+      if (_google3d) { viewer.scene.primitives.remove(_google3d); _google3d = null; }
+    } else {
+      try {
+        const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(2275207);
+        _google3d = viewer.scene.primitives.add(tileset);
+      } catch (err) {
+        setStatus(`Google 3D: ${err.message}`, 'error');
+        document.getElementById('google3dToggle').checked = false;
       }
     }
-  }
-}
-
-async function applyGoogleKey() {
-  const key = document.getElementById('googleKeyInput').value.trim();
-  if (!key) { setStatus('Enter a Google Maps API key.', 'error'); return; }
-  localStorage.setItem('googleMapsKey', key);
-
-  if (_google3d) { viewer.scene.primitives.remove(_google3d); _google3d = null; }
-  try {
-    const tileset = await Cesium.Cesium3DTileset.fromUrl(
-      `https://tile.googleapis.com/v1/3dtiles/root.json?key=${key}`
-    );
-    _google3d = viewer.scene.primitives.add(tileset);
-    setStatus('Google 3D Tiles loaded.', '');
-  } catch (err) {
-    setStatus(`Google 3D: ${err.message}`, 'error');
-    document.getElementById('google3dToggle').checked = false;
-    document.getElementById('googleKeyRow').style.display = 'none';
   }
 }
 
@@ -807,7 +780,7 @@ function initCesium(token) {
     const obChk = document.getElementById('osmBuildingsToggle');
     const g3Chk = document.getElementById('google3dToggle');
     if (obChk) obChk.checked = false;
-    if (g3Chk) { g3Chk.checked = false; document.getElementById('googleKeyRow').style.display = 'none'; }
+    if (g3Chk) g3Chk.checked = false;
   }
 
   const hasToken = token && token.length > 10;
@@ -883,9 +856,6 @@ document.getElementById('applyToken').addEventListener('click', () => {
 // Restore saved token and initialise on load
 const _savedToken = localStorage.getItem('cesiumToken') || '';
 if (_savedToken) document.getElementById('tokenInput').value = _savedToken;
-// Restore saved Google key
-const _savedGoogleKey = localStorage.getItem('googleMapsKey') || '';
-if (_savedGoogleKey) document.getElementById('googleKeyInput').value = _savedGoogleKey;
 initCesium(_savedToken);
 renderJammerList();     // populate the initial single jammer card
 renderBasemapButtons(); // populate basemap grid with correct active/disabled states
